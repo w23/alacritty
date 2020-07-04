@@ -28,6 +28,7 @@ use alacritty_terminal::util;
 use std::fmt::{self, Display, Formatter};
 
 pub mod rects;
+pub mod simple;
 
 // Shader paths for live reload.
 static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../res/text.f.glsl");

@@ -34,7 +34,7 @@ use alacritty_terminal::term::{RenderableCell, SizeInfo, Term, TermMode};
 use crate::config::Config;
 use crate::event::{DisplayUpdate, Mouse};
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, GlyphCache, QuadRenderer};
+use crate::renderer::{self, simple::SimpleRenderer, GlyphCache, QuadRenderer};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -111,7 +111,8 @@ pub struct Display {
     #[cfg(not(any(target_os = "macos", windows)))]
     pub wayland_event_queue: Option<EventQueue>,
 
-    renderer: QuadRenderer,
+    //FIXME renderer: QuadRenderer,
+    renderer: SimpleRenderer,
     glyph_cache: GlyphCache,
     meter: Meter,
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -165,7 +166,8 @@ impl Display {
         let viewport_size = window.inner_size();
 
         // Create renderer.
-        let mut renderer = QuadRenderer::new()?;
+        //FIXME let mut renderer = QuadRenderer::new()?;
+        let mut renderer = SimpleRenderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
             Self::new_glyph_cache(dpr, &mut renderer, config)?;
@@ -270,7 +272,8 @@ impl Display {
 
     fn new_glyph_cache(
         dpr: f64,
-        renderer: &mut QuadRenderer,
+        //renderer: &mut QuadRenderer,
+        renderer: &mut SimpleRenderer,
         config: &Config,
     ) -> Result<(GlyphCache, f32, f32), Error> {
         let font = config.font.clone();
