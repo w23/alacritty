@@ -1083,7 +1083,7 @@ impl<'a, C> RenderApi<'a, C> {
 ///
 /// If the current atlas is full, a new one will be created.
 #[inline]
-fn load_glyph(
+pub fn load_glyph(
     active_tex: &mut GLuint,
     atlas: &mut Vec<Atlas>,
     current_atlas: &mut usize,
@@ -1118,7 +1118,7 @@ fn load_glyph(
 }
 
 #[inline]
-fn clear_atlas(atlas: &mut Vec<Atlas>, current_atlas: &mut usize) {
+pub fn clear_atlas(atlas: &mut Vec<Atlas>, current_atlas: &mut usize) {
     for atlas in atlas.iter_mut() {
         atlas.clear();
     }
@@ -1303,7 +1303,7 @@ impl Drop for RectShaderProgram {
     }
 }
 
-fn create_program(vertex: GLuint, fragment: GLuint) -> Result<GLuint, ShaderCreationError> {
+pub fn create_program(vertex: GLuint, fragment: GLuint) -> Result<GLuint, ShaderCreationError> {
     unsafe {
         let program = gl::CreateProgram();
         gl::AttachShader(program, vertex);
@@ -1321,7 +1321,7 @@ fn create_program(vertex: GLuint, fragment: GLuint) -> Result<GLuint, ShaderCrea
     }
 }
 
-fn create_shader(
+pub fn create_shader(
     path: &str,
     kind: GLenum,
     source: Option<&'static str>,
@@ -1467,7 +1467,7 @@ impl From<io::Error> for ShaderCreationError {
 /// (0, 0)  x->
 /// ```
 #[derive(Debug)]
-struct Atlas {
+pub struct Atlas {
     /// Texture id for this atlas.
     id: GLuint,
 
