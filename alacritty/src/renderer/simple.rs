@@ -3,7 +3,7 @@ use {
         gl,
         gl::types::*,
         renderer::{
-            clear_atlas, create_program, create_shader, load_glyph, rects::RenderRect, Atlas,
+            clear_atlas, create_program, get_shader_info_log, load_glyph, rects::RenderRect, Atlas,
             Error, Glyph, GlyphCache, LoadGlyph, LoaderApi, ShaderCreationError, ATLAS_SIZE,
         },
     },
@@ -19,26 +19,93 @@ use {
     },
     font::{GlyphKey, RasterizedGlyph},
     log::debug,
-    std::{mem::size_of, ptr},
+    std::{mem::size_of, path::PathBuf, ptr},
 };
+
+fn create_shader(kind: GLenum, source: &str) -> Result<GLuint, ShaderCreationError> {
+    let len: [GLint; 1] = [source.len() as GLint];
+
+    let shader = unsafe {
+        let shader = gl::CreateShader(kind);
+        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
+        gl::CompileShader(shader);
+        shader
+    };
+
+    let mut success: GLint = 0;
+    unsafe {
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
+    }
+
+    if success == GLint::from(gl::TRUE) {
+        Ok(shader)
+    } else {
+        // Read log.
+        let log = get_shader_info_log(shader);
+
+        // Cleanup.
+        unsafe {
+            gl::DeleteShader(shader);
+        }
+
+        Err(ShaderCreationError::Compile(PathBuf::new(), log))
+    }
+}
+
+#[derive(Debug)]
+pub struct ShaderProgram {
+    /// Program id
+    id: GLuint,
+}
+
+impl ShaderProgram {
+    #[cfg(not(feature = "live-shader-reload"))]
+    fn new(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
+        Self::compile(vertex_src, fragment_src)
+    }
+
+    fn compile(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
+        let vertex_shader = create_shader(gl::VERTEX_SHADER, vertex_src)?;
+        let fragment_shader = create_shader(gl::FRAGMENT_SHADER, fragment_src)?;
+        let program = create_program(vertex_shader, fragment_shader)?;
+
+        unsafe {
+            gl::DeleteShader(fragment_shader);
+            gl::DeleteShader(vertex_shader);
+            gl::UseProgram(program);
+        }
+
+        Ok(Self { id: program })
+    }
+
+    #[cfg(feature = "live-shader-reload")]
+    fn new(vertex_path: &str, fragment_path: &str) -> Result<Self, ShaderCreationError> {}
+
+    #[cfg(feature = "live-shader-reload")]
+    fn poll() -> bool {
+        unimplemented!()
+    }
+}
+
+impl Drop for ShaderProgram {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteProgram(self.id);
+        }
+    }
+}
 
 /// Draw text using glyph refs
 ///
 /// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
 #[derive(Debug)]
 pub struct ScreenShaderProgram {
-    /// Program id.
-    id: GLuint,
-    // /// Projection scale and offset uniform.
-    // u_projection: GLint,
-    //
-    // /// Cell dimensions (pixels).
-    // u_cell_dim: GLint,
-    //
-    // /// Background pass flag.
-    // ///
-    // /// Rendering is split into two passes; 1 for backgrounds, and one for text.
-    // u_background: GLint,
+    program: ShaderProgram,
+
+    /// Cell dimensions (pixels).
+    u_cell_dim: GLint,
+    u_glyphRef: GLint,
+    u_atlas: GLint,
 }
 
 static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.f.glsl");
@@ -50,21 +117,11 @@ static SCREEN_SHADER_V: &str =
 
 impl ScreenShaderProgram {
     pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
-            (None, None)
+        let program = if cfg!(feature = "live-shader-reload") {
+            unimplemented!()
         } else {
-            (Some(SCREEN_SHADER_V), Some(SCREEN_SHADER_F))
+            ShaderProgram::new(SCREEN_SHADER_V, SCREEN_SHADER_F)?
         };
-        let vertex_shader = create_shader(SCREEN_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader =
-            create_shader(SCREEN_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
-        }
 
         macro_rules! cptr {
             ($thing:expr) => {
@@ -83,26 +140,16 @@ impl ScreenShaderProgram {
         }
 
         // get uniform locations
-        // let (projection, cell_dim, background) = unsafe {
-        //     (
-        //         gl::GetUniformLocation(program, cptr!(b"projection\0")),
-        //         gl::GetUniformLocation(program, cptr!(b"cellDim\0")),
-        //         gl::GetUniformLocation(program, cptr!(b"backgroundPass\0")),
-        //     )
-        // };
-        //
-        // assert_uniform_valid!(projection, cell_dim, background);
-
-        let shader = Self {
-            id: program,
-            // u_projection: projection,
-            // u_cell_dim: cell_dim,
-            // u_background: background,
+        let (cell_dim, atlas, glyphRef) = unsafe {
+            (
+                gl::GetUniformLocation(program.id, cptr!(b"cellDim\0")),
+                gl::GetUniformLocation(program.id, cptr!(b"atlas\0")),
+                gl::GetUniformLocation(program.id, cptr!(b"glyphRef\0")),
+            )
         };
+        assert_uniform_valid!(cell_dim, atlas, glyphRef);
 
-        unsafe {
-            gl::UseProgram(0);
-        }
+        let shader = Self { program, u_cell_dim: cell_dim, u_atlas: atlas, u_glyphRef: glyphRef };
 
         Ok(shader)
     }
@@ -130,15 +177,7 @@ impl ScreenShaderProgram {
 
     fn set_term_uniforms(&self, props: &term::SizeInfo) {
         unsafe {
-            //gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
-        }
-    }
-}
-
-impl Drop for ScreenShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
+            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
         }
     }
 }
@@ -171,6 +210,8 @@ pub struct SimpleRenderer {
     program: ScreenShaderProgram,
     screen_glyphs_ref: Vec<GlyphRef>,
     vbo: GLuint,
+    columns: usize,
+    lines: usize,
 }
 
 #[derive(Debug)]
@@ -180,7 +221,11 @@ pub struct RenderApi<'a, C> {
     atlas: &'a mut Vec<Atlas>,
     current_atlas: &'a mut usize,
     program: &'a ScreenShaderProgram,
+    screen_glyphs_ref_tex: GLuint,
+    screen_glyphs_ref: &'a mut Vec<GlyphRef>,
     config: &'a Config<C>,
+    columns: usize,
+    lines: usize,
     vbo: GLuint,
 }
 
@@ -261,6 +306,8 @@ impl SimpleRenderer {
             program: ScreenShaderProgram::new()?,
             screen_glyphs_ref: Vec::new(),
             vbo,
+            columns: 0,
+            lines: 0,
         };
 
         let atlas = Atlas::new(ATLAS_SIZE);
@@ -333,15 +380,15 @@ impl SimpleRenderer {
         // }
         // while self.rx.try_recv().is_ok() {}
 
-        // unsafe {
-        //     gl::UseProgram(self.program.id);
-        //     self.program.set_term_uniforms(props);
-        //
-        //     gl::BindVertexArray(self.vao);
-        //     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-        //     gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
-        //     gl::ActiveTexture(gl::TEXTURE0);
-        // }
+        unsafe {
+            gl::UseProgram(self.program.program.id);
+            self.program.set_term_uniforms(props);
+            //
+            //     gl::BindVertexArray(self.vao);
+            //     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
+            //     gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
+            //     gl::ActiveTexture(gl::TEXTURE0);
+        }
 
         let res = func(RenderApi {
             active_tex: &mut self.active_tex,
@@ -351,6 +398,10 @@ impl SimpleRenderer {
             program: &self.program,
             config,
             vbo: self.vbo,
+            screen_glyphs_ref: &mut self.screen_glyphs_ref,
+            screen_glyphs_ref_tex: self.screen_glyphs_ref_tex,
+            columns: self.columns,
+            lines: self.lines,
         });
 
         // unsafe {
@@ -424,6 +475,14 @@ impl SimpleRenderer {
             // self.program.update_projection(size.width, size.height, size.padding_x, size.padding_y);
             // gl::UseProgram(0);
         }
+
+        self.columns = size.cols().0;
+        self.lines = size.lines().0;
+
+        self.screen_glyphs_ref.resize(
+            self.columns * self.lines,
+            GlyphRef { uv_bot: 0.0, uv_left: 0.0, uv_width: 0.0, uv_height: 0.0 },
+        );
     }
 
     /// Render a rectangle.
@@ -627,11 +686,13 @@ impl<'a, C> RenderApi<'a, C> {
         // Add cell to batch.
         let glyph: Glyph = *glyph_cache.get(glyph_key, self);
 
-        // TODO
-        // 1. put glyph reference into texture
-        // 2. when render (WHEN?):
-        // 		1. update texture
-        // 		2. glRects
+        // put glyph reference into texture data
+        self.screen_glyphs_ref[cell.line.0 * self.columns + cell.column.0] = GlyphRef {
+            uv_bot: glyph.uv_bot,
+            uv_left: glyph.uv_left,
+            uv_width: glyph.uv_width,
+            uv_height: glyph.uv_height,
+        };
 
         // // Render zero-width characters.
         // for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
@@ -663,7 +724,20 @@ impl<'a, C> LoadGlyph for RenderApi<'a, C> {
 impl<'a, C> Drop for RenderApi<'a, C> {
     fn drop(&mut self) {
         unsafe {
-            gl::UseProgram(self.program.id);
+            gl::UseProgram(self.program.program.id);
+
+            gl::Uniform1i(self.program.u_atlas, 0);
+            gl::Uniform1i(self.program.u_glyphRef, 1);
+
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas[*self.current_atlas].id);
+
+            gl::ActiveTexture(gl::TEXTURE1);
+            gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
+            upload_texture(
+                self.columns as i32,
+                self.lines as i32,
+                self.screen_glyphs_ref.as_ptr() as *const _,
+            );
 
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
@@ -671,6 +745,7 @@ impl<'a, C> Drop for RenderApi<'a, C> {
 
             gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
             gl::DisableVertexAttribArray(0);
+            gl::ActiveTexture(gl::TEXTURE0);
         }
     }
 }

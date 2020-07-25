@@ -1386,7 +1386,7 @@ fn get_program_info_log(program: GLuint) -> String {
     String::from_utf8(buf).unwrap()
 }
 
-fn get_shader_info_log(shader: GLuint) -> String {
+pub fn get_shader_info_log(shader: GLuint) -> String {
     // Get expected log length.
     let mut max_length: GLint = 0;
     unsafe {

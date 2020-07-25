@@ -3,11 +3,21 @@
 //flat in vec4 bg;
 
 layout(location = 0, index = 0) out vec4 color;
-//uniform sampler2D mask;
+uniform sampler2D glyphRef;
+uniform sampler2D atlas;
+uniform vec2 cellDim;
 
-void main()
-{
-	color = vec4(1., 0., 0., 0.);
+void main() {
+	vec2 uv = gl_FragCoord.xy;
+	vec2 cell = floor(uv / cellDim);
+	vec2 cell_uv = fract(uv / cellDim);
+	//color = vec4(cell_uv, 0., 1.);
+
+	vec4 glyph = texture(glyphRef, (cell + .5) / vec2(textureSize(glyphRef, 0)));
+	//color = vec4(texture(atlas, uv / vec2(1000.)).rgb, 1);
+
+	color = vec4(texture(atlas, glyph.xy + glyph.zw * cell_uv).rgb, 1.);
+
     // if (backgroundPass != 0) {
     //     if (bg.a == 0.0)
     //         discard;
