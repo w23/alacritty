@@ -3,8 +3,9 @@ use {
         gl,
         gl::types::*,
         renderer::{
-            clear_atlas, create_program, get_shader_info_log, load_glyph, rects::RenderRect, Atlas,
-            Error, Glyph, GlyphCache, LoadGlyph, LoaderApi, ShaderCreationError, ATLAS_SIZE,
+            clear_atlas, create_program, filewatch, get_shader_info_log, load_glyph,
+            rects::RenderRect, Atlas, Error, Glyph, GlyphCache, LoadGlyph, LoaderApi,
+            ShaderCreationError, ATLAS_SIZE,
         },
     },
     alacritty_terminal::{
@@ -18,7 +19,7 @@ use {
         },
     },
     font::{GlyphKey, RasterizedGlyph},
-    log::debug,
+    log::*,
     std::{mem::size_of, path::PathBuf, ptr},
 };
 
@@ -53,18 +54,76 @@ fn create_shader(kind: GLenum, source: &str) -> Result<GLuint, ShaderCreationErr
 }
 
 #[derive(Debug)]
+struct Shader {
+    kind: GLuint,
+    id: GLuint,
+
+    #[cfg(feature = "live-shader-reload")]
+    file: filewatch::File,
+}
+
+impl Shader {
+    #[cfg(feature = "live-shader-reload")]
+    fn from_file(kind: GLuint, file_path: &str) -> Self {
+        Self { kind, id: 0, file: filewatch::File::new(std::path::Path::new(file_path)) }
+    }
+
+    #[cfg(not(feature = "live-shader-reload"))]
+    fn from_source(kind: GLuint, src: &str) -> Result<Self, ShaderCreationError> {
+        Ok(Self { kind, id: create_shader(kind, src)? })
+    }
+
+    fn id(&self) -> GLuint {
+        self.id
+    }
+
+    fn valid(&self) -> bool {
+        self.id != 0
+    }
+
+    #[cfg(feature = "live-shader-reload")]
+    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
+        Ok(match self.file.read_update() {
+            Some(src) => {
+                let new_id = create_shader(self.kind, &src)?;
+                self.delete();
+                self.id = new_id;
+                true
+            }
+            _ => false,
+        })
+    }
+
+    fn delete(&mut self) {
+        if self.id > 0 {
+            unsafe {
+                gl::DeleteShader(self.id);
+            }
+        }
+    }
+}
+
+impl Drop for Shader {
+    fn drop(&mut self) {
+        self.delete();
+    }
+}
+
+#[derive(Debug)]
 pub struct ShaderProgram {
     /// Program id
     id: GLuint,
+
+    #[cfg(feature = "live-shader-reload")]
+    vertex_shader: Shader,
+
+    #[cfg(feature = "live-shader-reload")]
+    fragment_shader: Shader,
 }
 
 impl ShaderProgram {
     #[cfg(not(feature = "live-shader-reload"))]
-    fn new(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
-        Self::compile(vertex_src, fragment_src)
-    }
-
-    fn compile(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
+    fn from_sources(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
         let vertex_shader = create_shader(gl::VERTEX_SHADER, vertex_src)?;
         let fragment_shader = create_shader(gl::FRAGMENT_SHADER, fragment_src)?;
         let program = create_program(vertex_shader, fragment_shader)?;
@@ -72,18 +131,48 @@ impl ShaderProgram {
         unsafe {
             gl::DeleteShader(fragment_shader);
             gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
         }
 
         Ok(Self { id: program })
     }
 
     #[cfg(feature = "live-shader-reload")]
-    fn new(vertex_path: &str, fragment_path: &str) -> Result<Self, ShaderCreationError> {}
+    fn from_files(
+        vertex_path: &'static str,
+        fragment_path: &'static str,
+    ) -> Result<Self, ShaderCreationError> {
+        Ok(Self {
+            id: 0,
+            vertex_shader: Shader::from_file(gl::VERTEX_SHADER, vertex_path),
+            fragment_shader: Shader::from_file(gl::FRAGMENT_SHADER, fragment_path),
+        })
+    }
 
     #[cfg(feature = "live-shader-reload")]
-    fn poll() -> bool {
-        unimplemented!()
+    fn valid(&self) -> bool {
+        self.id != 0
+    }
+
+    #[cfg(feature = "live-shader-reload")]
+    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
+        Ok(
+            if (self.vertex_shader.poll()? || self.fragment_shader.poll()?)
+                && (self.fragment_shader.valid() && self.vertex_shader.valid())
+            {
+                let program = create_program(self.vertex_shader.id, self.fragment_shader.id)?;
+
+                if self.id > 0 {
+                    unsafe {
+                        gl::DeleteProgram(self.id);
+                    }
+                }
+
+                self.id = program;
+                true
+            } else {
+                false
+            },
+        )
     }
 }
 
@@ -104,7 +193,7 @@ pub struct ScreenShaderProgram {
 
     /// Cell dimensions (pixels).
     u_cell_dim: GLint,
-    u_glyphRef: GLint,
+    u_glyph_ref: GLint,
     u_atlas: GLint,
 }
 
@@ -116,42 +205,61 @@ static SCREEN_SHADER_V: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.v.glsl"));
 
 impl ScreenShaderProgram {
+    #[cfg(feature = "live-shader-reload")]
     pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let program = if cfg!(feature = "live-shader-reload") {
-            unimplemented!()
-        } else {
-            ShaderProgram::new(SCREEN_SHADER_V, SCREEN_SHADER_F)?
-        };
+        let program = ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?;
+        let mut this = Self { program, u_cell_dim: -1, u_glyph_ref: -1, u_atlas: -1 };
+        Ok(this)
+    }
 
+    #[cfg(not(feature = "live-shader-reload"))]
+    pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
+        let program = ShaderProgram::from_sources(SCREEN_SHADER_V, SCREEN_SHADER_F)?;
+        let mut this = Self { program, u_cell_dim: -1, u_glyph_ref: -1, u_atlas: -1 };
+        this.update();
+        Ok(this)
+    }
+
+    fn update(&mut self) {
         macro_rules! cptr {
             ($thing:expr) => {
                 $thing.as_ptr() as *const _
             };
         }
 
-        macro_rules! assert_uniform_valid {
-            ($uniform:expr) => {
-                assert!($uniform != gl::INVALID_VALUE as i32);
-                assert!($uniform != gl::INVALID_OPERATION as i32);
-            };
-            ( $( $uniform:expr ),* ) => {
-                $( assert_uniform_valid!($uniform); )*
-            };
-        }
+        // macro_rules! assert_uniform_valid {
+        //     ($uniform:expr) => {
+        //         assert!($uniform != gl::INVALID_VALUE as i32);
+        //         assert!($uniform != gl::INVALID_OPERATION as i32);
+        //     };
+        //     ( $( $uniform:expr ),* ) => {
+        //         $( assert_uniform_valid!($uniform); )*
+        //     };
+        // }
 
         // get uniform locations
-        let (cell_dim, atlas, glyphRef) = unsafe {
+        let (cell_dim, atlas, glyph_ref) = unsafe {
             (
-                gl::GetUniformLocation(program.id, cptr!(b"cellDim\0")),
-                gl::GetUniformLocation(program.id, cptr!(b"atlas\0")),
-                gl::GetUniformLocation(program.id, cptr!(b"glyphRef\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
             )
         };
-        assert_uniform_valid!(cell_dim, atlas, glyphRef);
+        // assert_uniform_valid!(cell_dim, atlas, glyph_ref);
 
-        let shader = Self { program, u_cell_dim: cell_dim, u_atlas: atlas, u_glyphRef: glyphRef };
+        self.u_cell_dim = cell_dim;
+        self.u_glyph_ref = glyph_ref;
+        self.u_atlas = atlas;
+    }
 
-        Ok(shader)
+    #[cfg(feature = "live-shader-reload")]
+    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
+        if self.program.poll()? {
+            self.update();
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     // fn update_projection(&self, width: f32, height: f32, padding_x: f32, padding_y: f32) {
@@ -184,8 +292,8 @@ impl ScreenShaderProgram {
 
 #[derive(Debug, Clone)]
 struct GlyphRef {
-    uv_bot: f32,
     uv_left: f32,
+    uv_bot: f32,
     uv_width: f32,
     uv_height: f32,
 }
@@ -217,10 +325,10 @@ pub struct SimpleRenderer {
 #[derive(Debug)]
 pub struct RenderApi<'a, C> {
     active_tex: &'a mut GLuint,
-    // batch: &'a mut Batch,
+    props: &'a term::SizeInfo,
     atlas: &'a mut Vec<Atlas>,
     current_atlas: &'a mut usize,
-    program: &'a ScreenShaderProgram,
+    program: &'a mut ScreenShaderProgram,
     screen_glyphs_ref_tex: GLuint,
     screen_glyphs_ref: &'a mut Vec<GlyphRef>,
     config: &'a Config<C>,
@@ -383,19 +491,15 @@ impl SimpleRenderer {
         unsafe {
             gl::UseProgram(self.program.program.id);
             self.program.set_term_uniforms(props);
-            //
-            //     gl::BindVertexArray(self.vao);
-            //     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-            //     gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
-            //     gl::ActiveTexture(gl::TEXTURE0);
         }
 
         let res = func(RenderApi {
+            props,
             active_tex: &mut self.active_tex,
             // batch: &mut self.batch,
             atlas: &mut self.atlas,
             current_atlas: &mut self.current_atlas,
-            program: &self.program,
+            program: &mut self.program,
             config,
             vbo: self.vbo,
             screen_glyphs_ref: &mut self.screen_glyphs_ref,
@@ -723,11 +827,25 @@ impl<'a, C> LoadGlyph for RenderApi<'a, C> {
 
 impl<'a, C> Drop for RenderApi<'a, C> {
     fn drop(&mut self) {
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                }
+                Ok(updated) if updated => unsafe {
+                    gl::UseProgram(self.program.program.id);
+                    self.program.set_term_uniforms(self.props);
+                },
+                _ => {}
+            }
+        }
+
         unsafe {
             gl::UseProgram(self.program.program.id);
 
             gl::Uniform1i(self.program.u_atlas, 0);
-            gl::Uniform1i(self.program.u_glyphRef, 1);
+            gl::Uniform1i(self.program.u_glyph_ref, 1);
 
             gl::BindTexture(gl::TEXTURE_2D, self.atlas[*self.current_atlas].id);
 

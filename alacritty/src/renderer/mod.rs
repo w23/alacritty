@@ -27,6 +27,7 @@ use alacritty_terminal::term::{self, CursorKey, RenderableCell, RenderableCellCo
 use alacritty_terminal::util;
 use std::fmt::{self, Display, Formatter};
 
+mod filewatch;
 pub mod rects;
 pub mod simple;
 

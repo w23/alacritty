@@ -9,14 +9,24 @@ uniform vec2 cellDim;
 
 void main() {
 	vec2 uv = gl_FragCoord.xy;
+	uv.y = 1440. - uv.y;
 	vec2 cell = floor(uv / cellDim);
 	vec2 cell_uv = fract(uv / cellDim);
 	//color = vec4(cell_uv, 0., 1.);
+	//color = vec4(cell / 16., 0., 1.);
 
 	vec4 glyph = texture(glyphRef, (cell + .5) / vec2(textureSize(glyphRef, 0)));
+	color = vec4(fract(glyph.xy), 0., 1.);
+	//color = vec4(0., 1., 0., 1.);
 	//color = vec4(texture(atlas, uv / vec2(1000.)).rgb, 1);
+	//color = vec4(texture(atlas, uv / vec2(1024.)).bbb, 1.);
 
+	//glyph.x = 1. - glyph.x;
+	//glyph.y = 1. - glyph.y;
+	//cell_uv.x = 1. - cell_uv.x;
 	color = vec4(texture(atlas, glyph.xy + glyph.zw * cell_uv).rgb, 1.);
+	//color = vec4(texture(atlas, glyph.xy + glyph.zw * cell_uv).rgb, 1.);
+	//color = vec4(1., 0., 0., 1.);
 
     // if (backgroundPass != 0) {
     //     if (bg.a == 0.0)
