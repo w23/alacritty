@@ -191,9 +191,16 @@ impl Drop for ShaderProgram {
 pub struct ScreenShaderProgram {
     program: ShaderProgram,
 
+    /// vec4(pad.xy, resolution.xy)
+    u_screen_dim: GLint,
+
     /// Cell dimensions (pixels).
     u_cell_dim: GLint,
+
     u_glyph_ref: GLint,
+    u_color_fg: GLint,
+    u_color_bg: GLint,
+
     u_atlas: GLint,
 }
 
@@ -208,54 +215,79 @@ impl ScreenShaderProgram {
     #[cfg(feature = "live-shader-reload")]
     pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
         let program = ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?;
-        let mut this = Self { program, u_cell_dim: -1, u_glyph_ref: -1, u_atlas: -1 };
+        let mut this = Self {
+            program,
+            u_screen_dim: -1,
+            u_cell_dim: -1,
+            u_glyph_ref: -1,
+            u_atlas: -1,
+            u_color_fg: -1,
+            u_color_bg: -1,
+        };
         Ok(this)
     }
 
     #[cfg(not(feature = "live-shader-reload"))]
     pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
         let program = ShaderProgram::from_sources(SCREEN_SHADER_V, SCREEN_SHADER_F)?;
-        let mut this = Self { program, u_cell_dim: -1, u_glyph_ref: -1, u_atlas: -1 };
-        this.update();
+        let mut this = Self {
+            program,
+            u_screen_dim: -1,
+            u_cell_dim: -1,
+            u_glyph_ref: -1,
+            u_atlas: -1,
+            u_color_fg: -1,
+            u_color_bg: -1,
+        };
+        this.update(true);
         Ok(this)
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, validate_uniforms: bool) {
         macro_rules! cptr {
             ($thing:expr) => {
                 $thing.as_ptr() as *const _
             };
         }
 
-        // macro_rules! assert_uniform_valid {
-        //     ($uniform:expr) => {
-        //         assert!($uniform != gl::INVALID_VALUE as i32);
-        //         assert!($uniform != gl::INVALID_OPERATION as i32);
-        //     };
-        //     ( $( $uniform:expr ),* ) => {
-        //         $( assert_uniform_valid!($uniform); )*
-        //     };
-        // }
+        macro_rules! assert_uniform_valid {
+            ($uniform:expr) => {
+                assert!($uniform != gl::INVALID_VALUE as i32);
+                assert!($uniform != gl::INVALID_OPERATION as i32);
+            };
+            ( $( $uniform:expr ),* ) => {
+                $( assert_uniform_valid!($uniform); )*
+            };
+        }
 
         // get uniform locations
-        let (cell_dim, atlas, glyph_ref) = unsafe {
+        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref) = unsafe {
             (
+                gl::GetUniformLocation(self.program.id, cptr!(b"screenDim\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"color_bg\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"color_fg\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
             )
         };
-        // assert_uniform_valid!(cell_dim, atlas, glyph_ref);
 
+        if validate_uniforms {
+            assert_uniform_valid!(screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref);
+        }
+
+        self.u_screen_dim = screen_dim;
         self.u_cell_dim = cell_dim;
         self.u_glyph_ref = glyph_ref;
         self.u_atlas = atlas;
+        self.u_color_fg = color_fg;
+        self.u_color_bg = color_bg;
     }
 
     #[cfg(feature = "live-shader-reload")]
     fn poll(&mut self) -> Result<bool, ShaderCreationError> {
         if self.program.poll()? {
-            self.update();
+            self.update(false);
             return Ok(true);
         }
 
@@ -285,6 +317,13 @@ impl ScreenShaderProgram {
 
     fn set_term_uniforms(&self, props: &term::SizeInfo) {
         unsafe {
+            gl::Uniform4f(
+                self.u_screen_dim,
+                props.padding_x,
+                props.padding_y,
+                props.width,
+                props.height,
+            );
             gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
         }
     }
@@ -296,6 +335,78 @@ struct GlyphRef {
     uv_bot: f32,
     uv_width: f32,
     uv_height: f32,
+}
+
+enum PixelFormat {
+    RGBA8,
+    RGB8,
+    RGBA32F,
+}
+
+struct TextureFormat {
+    internal: i32,
+    format: u32,
+    texel_type: u32,
+}
+
+fn get_gl_format(format: PixelFormat) -> TextureFormat {
+    match format {
+        PixelFormat::RGBA8 => TextureFormat {
+            internal: gl::RGBA as i32,
+            format: gl::RGBA,
+            texel_type: gl::UNSIGNED_BYTE,
+        },
+        PixelFormat::RGB8 => TextureFormat {
+            internal: gl::RGB as i32,
+            format: gl::RGB,
+            texel_type: gl::UNSIGNED_BYTE,
+        },
+        PixelFormat::RGBA32F => {
+            TextureFormat { internal: gl::RGBA32F as i32, format: gl::RGBA, texel_type: gl::FLOAT }
+        }
+    }
+}
+
+unsafe fn upload_texture(width: i32, height: i32, format: PixelFormat, ptr: *const f32) {
+    let format = get_gl_format(format);
+    gl::TexImage2D(
+        gl::TEXTURE_2D,
+        0,
+        format.internal,
+        width,
+        height,
+        0,
+        format.format,
+        format.texel_type,
+        ptr as *const _,
+    );
+}
+
+unsafe fn create_texture(width: i32, height: i32, format: PixelFormat) -> GLuint {
+    let mut id: GLuint = 0;
+    let format = get_gl_format(format);
+
+    gl::GenTextures(1, &mut id);
+    gl::BindTexture(gl::TEXTURE_2D, id);
+    gl::TexImage2D(
+        gl::TEXTURE_2D,
+        0,
+        format.internal,
+        width,
+        height,
+        0,
+        format.format,
+        format.texel_type,
+        ptr::null(),
+    );
+
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+
+    gl::BindTexture(gl::TEXTURE_2D, 0);
+    id
 }
 
 #[derive(Debug)]
@@ -312,73 +423,26 @@ pub struct SimpleRenderer {
     active_tex: GLuint,
     // batch: Batch,
     // rx: mpsc::Receiver<Msg>,
+    screen_glyphs_ref: Vec<GlyphRef>,
+    screen_colors_fg: Vec<[u8; 4]>,
+    screen_colors_bg: Vec<[u8; 3]>,
 
     // Texture that stores glyph->atlas references for the entire screen
     screen_glyphs_ref_tex: GLuint,
+    screen_colors_fg_tex: GLuint,
+    screen_colors_bg_tex: GLuint,
+
     program: ScreenShaderProgram,
-    screen_glyphs_ref: Vec<GlyphRef>,
     vbo: GLuint,
     columns: usize,
     lines: usize,
-}
-
-#[derive(Debug)]
-pub struct RenderApi<'a, C> {
-    active_tex: &'a mut GLuint,
-    props: &'a term::SizeInfo,
-    atlas: &'a mut Vec<Atlas>,
-    current_atlas: &'a mut usize,
-    program: &'a mut ScreenShaderProgram,
-    screen_glyphs_ref_tex: GLuint,
-    screen_glyphs_ref: &'a mut Vec<GlyphRef>,
-    config: &'a Config<C>,
-    columns: usize,
-    lines: usize,
-    vbo: GLuint,
-}
-
-unsafe fn upload_texture(width: i32, height: i32, ptr: *const f32) {
-    gl::TexImage2D(
-        gl::TEXTURE_2D,
-        0,
-        gl::RGBA32F as i32,
-        width,
-        height,
-        0,
-        gl::RGBA,
-        gl::FLOAT,
-        ptr as *const _,
-    );
-}
-
-unsafe fn create_texture(width: i32, height: i32) -> GLuint {
-    let mut id: GLuint = 0;
-    gl::GenTextures(1, &mut id);
-    gl::BindTexture(gl::TEXTURE_2D, id);
-    gl::TexImage2D(
-        gl::TEXTURE_2D,
-        0,
-        gl::RGBA32F as i32,
-        width,
-        height,
-        0,
-        gl::RGBA,
-        gl::FLOAT,
-        ptr::null(),
-    );
-
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-
-    gl::BindTexture(gl::TEXTURE_2D, 0);
-    id
 }
 
 impl SimpleRenderer {
     pub fn new() -> Result<SimpleRenderer, Error> {
-        let screen_glyphs_ref_tex = unsafe { create_texture(256, 256) };
+        let screen_glyphs_ref_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA32F) };
+        let screen_colors_fg_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA8) };
+        let screen_colors_bg_tex = unsafe { create_texture(256, 256, PixelFormat::RGB8) };
         let mut vbo: GLuint = 0;
 
         unsafe {
@@ -410,13 +474,20 @@ impl SimpleRenderer {
             active_tex: 0,
             //     batch: Batch::new(),
             //     rx: msg_rx,
-            screen_glyphs_ref_tex,
-            program: ScreenShaderProgram::new()?,
             screen_glyphs_ref: Vec::new(),
+            screen_colors_fg: Vec::new(),
+            screen_colors_bg: Vec::new(),
+
+            screen_glyphs_ref_tex,
+            screen_colors_fg_tex,
+            screen_colors_bg_tex,
+            program: ScreenShaderProgram::new()?,
             vbo,
             columns: 0,
             lines: 0,
         };
+
+        //eprintln!("renderer: {:?}", renderer);
 
         let atlas = Atlas::new(ATLAS_SIZE);
         renderer.atlas.push(atlas);
@@ -482,30 +553,33 @@ impl SimpleRenderer {
     where
         F: FnOnce(RenderApi<'_, C>) -> T,
     {
-        // Flush message queue.
-        // if let Ok(Msg::ShaderReload) = self.rx.try_recv() {
-        //     self.reload_shaders(props);
-        // }
-        // while self.rx.try_recv().is_ok() {}
+        //eprintln!("clear");
+        self.screen_glyphs_ref
+            .iter_mut()
+            .map(|x| *x = GlyphRef { uv_bot: 0.0, uv_left: 0.0, uv_width: 0.0, uv_height: 0.0 })
+            .count();
 
-        unsafe {
-            gl::UseProgram(self.program.program.id);
-            self.program.set_term_uniforms(props);
-        }
+        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
+        self.screen_colors_bg.iter_mut().map(|x| *x = [0u8; 3]).count();
 
         let res = func(RenderApi {
+            seen_cells: false,
+            this: self,
             props,
-            active_tex: &mut self.active_tex,
-            // batch: &mut self.batch,
-            atlas: &mut self.atlas,
-            current_atlas: &mut self.current_atlas,
-            program: &mut self.program,
+            // active_tex: &mut self.active_tex,
+            // // batch: &mut self.batch,
+            // atlas: &mut self.atlas,
+            // current_atlas: &mut self.current_atlas,
+            // program: &mut self.program,
             config,
-            vbo: self.vbo,
-            screen_glyphs_ref: &mut self.screen_glyphs_ref,
-            screen_glyphs_ref_tex: self.screen_glyphs_ref_tex,
-            columns: self.columns,
-            lines: self.lines,
+            // vbo: self.vbo,
+            // screen_glyphs_ref: &mut self.screen_glyphs_ref,
+            // screen_glyphs_ref_tex: self.screen_glyphs_ref_tex,
+            // screen_colors_fg: self.screen_colors
+            // screen_colors_fg_tex,
+            // screen_colors_bg_tex,
+            // columns: self.columns,
+            // lines: self.lines,
         });
 
         // unsafe {
@@ -564,7 +638,7 @@ impl SimpleRenderer {
     //     self.rect_program = rect_program;
     // }
 
-    pub fn resize(&mut self, size: &SizeInfo) {
+    pub fn resize(&mut self, size: &term::SizeInfo) {
         // Viewport.
         unsafe {
             gl::Viewport(
@@ -582,11 +656,12 @@ impl SimpleRenderer {
 
         self.columns = size.cols().0;
         self.lines = size.lines().0;
+        let cells = self.columns * self.lines;
 
-        self.screen_glyphs_ref.resize(
-            self.columns * self.lines,
-            GlyphRef { uv_bot: 0.0, uv_left: 0.0, uv_width: 0.0, uv_height: 0.0 },
-        );
+        self.screen_colors_bg.resize(cells, [0u8; 3]);
+        self.screen_colors_fg.resize(cells, [0u8; 4]);
+        self.screen_glyphs_ref
+            .resize(cells, GlyphRef { uv_bot: 0.0, uv_left: 0.0, uv_width: 0.0, uv_height: 0.0 });
     }
 
     /// Render a rectangle.
@@ -625,6 +700,87 @@ impl SimpleRenderer {
         //     gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
         // }
     }
+
+    fn render(&mut self, props: &SizeInfo) {
+        //eprintln!("render");
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                }
+                Ok(updated) if updated => {
+                    eprintln!("updated shader: {:?}", self.program);
+                }
+                _ => {}
+            }
+        }
+
+        unsafe {
+            gl::UseProgram(self.program.program.id);
+
+            self.program.set_term_uniforms(props);
+            gl::Uniform1i(self.program.u_atlas, 0);
+            gl::Uniform1i(self.program.u_glyph_ref, 1);
+            gl::Uniform1i(self.program.u_color_fg, 2);
+            gl::Uniform1i(self.program.u_color_bg, 3);
+
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas[self.current_atlas].id);
+
+            gl::ActiveTexture(gl::TEXTURE1);
+            gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
+            //eprintln!("glyphs: {:?}", &self.screen_glyphs_ref[0..10]);
+            upload_texture(
+                self.columns as i32,
+                self.lines as i32,
+                PixelFormat::RGBA32F,
+                self.screen_glyphs_ref.as_ptr() as *const _,
+            );
+
+            gl::ActiveTexture(gl::TEXTURE2);
+            gl::BindTexture(gl::TEXTURE_2D, self.screen_colors_fg_tex);
+            upload_texture(
+                self.columns as i32,
+                self.lines as i32,
+                PixelFormat::RGBA8,
+                self.screen_colors_fg.as_ptr() as *const _,
+            );
+
+            gl::ActiveTexture(gl::TEXTURE3);
+            gl::BindTexture(gl::TEXTURE_2D, self.screen_colors_bg_tex);
+            upload_texture(
+                self.columns as i32,
+                self.lines as i32,
+                PixelFormat::RGB8,
+                self.screen_colors_bg.as_ptr() as *const _,
+            );
+
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
+            gl::EnableVertexAttribArray(0);
+
+            gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+            gl::DisableVertexAttribArray(0);
+            gl::ActiveTexture(gl::TEXTURE0);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RenderApi<'a, C> {
+    seen_cells: bool,
+    this: &'a mut SimpleRenderer,
+    //active_tex: &'a mut GLuint,
+    props: &'a term::SizeInfo,
+    // atlas: &'a mut Vec<Atlas>,
+    // current_atlas: &'a mut usize,
+    // program: &'a mut ScreenShaderProgram,
+    // screen_glyphs_ref_tex: GLuint,
+    // screen_glyphs_ref: &'a mut Vec<GlyphRef>,
+    config: &'a Config<C>,
+    // columns: usize,
+    // lines: usize,
+    // vbo: GLuint,
 }
 
 impl<'a, C> RenderApi<'a, C> {
@@ -744,6 +900,7 @@ impl<'a, C> RenderApi<'a, C> {
     // fn update_main_texture_cell(&mut self, cell: RenderableCell, glyph: &Glyph) {}
 
     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+        self.seen_cells = true;
         let chars = match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
@@ -789,14 +946,21 @@ impl<'a, C> RenderApi<'a, C> {
 
         // Add cell to batch.
         let glyph: Glyph = *glyph_cache.get(glyph_key, self);
+        let cell_index = cell.line.0 * self.this.columns + cell.column.0;
 
         // put glyph reference into texture data
-        self.screen_glyphs_ref[cell.line.0 * self.columns + cell.column.0] = GlyphRef {
+        self.this.screen_glyphs_ref[cell_index] = GlyphRef {
             uv_bot: glyph.uv_bot,
             uv_left: glyph.uv_left,
             uv_width: glyph.uv_width,
             uv_height: glyph.uv_height,
         };
+        //eprintln!("{}: {:?}", cell_index, self.this.screen_glyphs_ref[cell_index]);
+
+        self.this.screen_colors_fg[cell_index] =
+            [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
+
+        self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
 
         // // Render zero-width characters.
         // for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
@@ -817,53 +981,23 @@ impl<'a, C> RenderApi<'a, C> {
 
 impl<'a, C> LoadGlyph for RenderApi<'a, C> {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
-        load_glyph(self.active_tex, self.atlas, self.current_atlas, rasterized)
+        load_glyph(
+            &mut self.this.active_tex,
+            &mut self.this.atlas,
+            &mut self.this.current_atlas,
+            rasterized,
+        )
     }
 
     fn clear(&mut self) {
-        clear_atlas(self.atlas, self.current_atlas)
+        clear_atlas(&mut self.this.atlas, &mut self.this.current_atlas)
     }
 }
 
 impl<'a, C> Drop for RenderApi<'a, C> {
     fn drop(&mut self) {
-        #[cfg(feature = "live-shader-reload")]
-        {
-            match self.program.poll() {
-                Err(e) => {
-                    error!("shader error: {}", e);
-                }
-                Ok(updated) if updated => unsafe {
-                    gl::UseProgram(self.program.program.id);
-                    self.program.set_term_uniforms(self.props);
-                },
-                _ => {}
-            }
-        }
-
-        unsafe {
-            gl::UseProgram(self.program.program.id);
-
-            gl::Uniform1i(self.program.u_atlas, 0);
-            gl::Uniform1i(self.program.u_glyph_ref, 1);
-
-            gl::BindTexture(gl::TEXTURE_2D, self.atlas[*self.current_atlas].id);
-
-            gl::ActiveTexture(gl::TEXTURE1);
-            gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
-            upload_texture(
-                self.columns as i32,
-                self.lines as i32,
-                self.screen_glyphs_ref.as_ptr() as *const _,
-            );
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
-            gl::EnableVertexAttribArray(0);
-
-            gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
-            gl::DisableVertexAttribArray(0);
-            gl::ActiveTexture(gl::TEXTURE0);
+        if self.seen_cells {
+            self.this.render(self.props);
         }
     }
 }
