@@ -334,10 +334,11 @@ impl GlyphCache {
 
     /// Prefetch glyphs that are almost guaranteed to be loaded anyways.
     fn load_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L) {
-        self.load_glyphs_for_font(self.font_key, loader);
-        self.load_glyphs_for_font(self.bold_italic_key, loader);
-        self.load_glyphs_for_font(self.italic_key, loader);
-        self.load_glyphs_for_font(self.bold_italic_key, loader);
+        // FIXME: simple render doesn't know about cell size at this point, so we can't preload glyphs now
+        // self.load_glyphs_for_font(self.font_key, loader);
+        // self.load_glyphs_for_font(self.bold_italic_key, loader);
+        // self.load_glyphs_for_font(self.italic_key, loader);
+        // self.load_glyphs_for_font(self.bold_italic_key, loader);
     }
 
     /// Calculate font metrics without access to a glyph cache.

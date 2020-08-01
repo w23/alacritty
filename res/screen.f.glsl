@@ -38,16 +38,19 @@ void main() {
 	vec3 bg = texture(color_bg, tuv).rgb;
 	//color = vec4(fract(glyph.xy), 0., 1.);
 	//color = vec4(0., 1., 0., 1.);
-	//color = vec4(texture(atlas, uv / vec2(1000.)).rgb, 1);
+	color = vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1);
 	//color = vec4(texture(atlas, uv / vec2(1024.)).bbb, 1.);
 
 	//glyph.x = 1. - glyph.x;
 	//glyph.y = 1. - glyph.y;
 	//cell_uv.x = 1. - cell_uv.x;
 
-	vec4 mask = texture(atlas, glyph.xy + glyph.zw * cell_uv);
+	vec2 atlas_pix = (glyph.xy * 255. + cell_uv) * cellDim;
+	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
 	//color = vec4(mask.rgb, 1.);
 	color = vec4(mix(bg, fg.rgb, mask.rgb), 1.);
+
+	//color = mix(color, vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1), 1.);
 
 	//color = vec4(texture(atlas, glyph.xy + glyph.zw * cell_uv).rgb, 1.);
 	//color = vec4(1., 0., 0., 1.);
