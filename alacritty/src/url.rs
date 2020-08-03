@@ -1,10 +1,9 @@
 use std::cmp::min;
 use std::mem;
 
+use crossfont::Metrics;
 use glutin::event::{ElementState, ModifiersState};
 use urlocator::{UrlLocation, UrlLocator};
-
-use font::Metrics;
 
 use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::Flags;
@@ -90,7 +89,7 @@ impl Urls {
         self.last_point = Some(end);
 
         // Extend current state if a wide char spacer is encountered.
-        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             if let UrlLocation::Url(_, mut end_offset) = self.state {
                 if end_offset != 0 {
                     end_offset += 1;

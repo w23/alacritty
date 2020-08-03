@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{self, ErrorKind, Read, Write};
 use std::marker::Send;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use log::error;
 #[cfg(not(windows))]
@@ -14,12 +15,11 @@ use mio::{self, Events, PollOpt, Ready};
 use mio_extras::channel::{self, Receiver, Sender};
 
 use crate::ansi;
-use crate::config::Config;
 use crate::event::{self, Event, EventListener};
 use crate::sync::FairMutex;
 use crate::term::{SizeInfo, Term};
+use crate::thread;
 use crate::tty;
-use crate::util::thread;
 
 /// Max bytes to read from the PTY.
 const MAX_READ: usize = 0x10_000;
@@ -154,11 +154,12 @@ where
     U: EventListener + Send + 'static,
 {
     /// Create a new event loop.
-    pub fn new<V>(
+    pub fn new(
         terminal: Arc<FairMutex<Term<U>>>,
         event_proxy: U,
         pty: T,
-        config: &Config<V>,
+        hold: bool,
+        ref_test: bool,
     ) -> EventLoop<T, U> {
         let (tx, rx) = channel::channel();
         EventLoop {
@@ -168,8 +169,8 @@ where
             rx,
             terminal,
             event_proxy,
-            hold: config.hold,
-            ref_test: config.debug.ref_test,
+            hold,
+            ref_test,
         }
     }
 
@@ -300,7 +301,7 @@ where
         Ok(())
     }
 
-    pub fn spawn(mut self) -> thread::JoinHandle<(Self, State)> {
+    pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
         thread::spawn_named("PTY reader", move || {
             let mut state = State::default();
             let mut buf = [0u8; MAX_READ];
@@ -354,26 +355,22 @@ where
                                 || token == self.pty.write_token() =>
                         {
                             #[cfg(unix)]
-                            {
-                                if UnixReady::from(event.readiness()).is_hup() {
-                                    // Don't try to do I/O on a dead PTY.
-                                    continue;
-                                }
+                            if UnixReady::from(event.readiness()).is_hup() {
+                                // Don't try to do I/O on a dead PTY.
+                                continue;
                             }
 
                             if event.readiness().is_readable() {
                                 if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut())
                                 {
+                                    // On Linux, a `read` on the master side of a PTY can fail
+                                    // with `EIO` if the client side hangs up.  In that case,
+                                    // just loop back round for the inevitable `Exited` event.
+                                    // This sucks, but checking the process is either racy or
+                                    // blocking.
                                     #[cfg(target_os = "linux")]
-                                    {
-                                        // On Linux, a `read` on the master side of a PTY can fail
-                                        // with `EIO` if the client side hangs up.  In that case,
-                                        // just loop back round for the inevitable `Exited` event.
-                                        // This sucks, but checking the process is either racy or
-                                        // blocking.
-                                        if err.kind() == ErrorKind::Other {
-                                            continue;
-                                        }
+                                    if err.kind() == ErrorKind::Other {
+                                        continue;
                                     }
 
                                     error!("Error reading from PTY in event loop: {}", err);

@@ -28,12 +28,17 @@ a daily driver.
 
 Precompiled binaries are available from the [GitHub releases page](https://github.com/alacritty/alacritty/releases).
 
+## Features
+
+You can find an overview over the features available in Alacritty [here](./docs/features.md).
+
 ## Further information
 
 - [Announcing Alacritty, a GPU-Accelerated Terminal Emulator](https://jwilm.io/blog/announcing-alacritty/) January 6, 2017
 - [A short talk about Alacritty at the Rust Meetup January 2017](https://air.mozilla.org/rust-meetup-january-2017/) (starts at 57:00)
 - [Alacritty Lands Scrollback, Publishes Benchmarks](https://jwilm.io/blog/alacritty-lands-scrollback/) September 17, 2018
 - [Version 0.3.0 Release Announcement](https://blog.christianduerr.com/alacritty_030_announcement) April 07, 2019
+- [Version 0.5.0 Release Announcement](https://blog.christianduerr.com/alacritty_0_5_0_announcement) July 31, 2020
 
 ## Installation
 
@@ -95,13 +100,7 @@ nix-env -iA nixos.alacritty
 zypper in alacritty
 ```
 
-### Pop!\_OS / Ubuntu
-
-> If you're not running Pop!_OS, you'll have to add a third party repository first:
->
-> ```sh
-> add-apt-repository ppa:mmstick76/alacritty
-> ```
+### Pop!\_OS
 
 ```sh
 apt install alacritty
@@ -131,8 +130,9 @@ pkg install alacritty
 brew cask install alacritty
 ```
 
-Once the cask is installed, it is recommended to setup the [manual page](INSTALL.md#manual-page),
-[shell completions](INSTALL.md#shell-completions), and [terminfo definitions](INSTALL.md#terminfo).
+Once the cask is installed, it is recommended to set up the manual page, shell
+completions, and terminfo definitions. These are located inside the installed
+application's Resources directory: `Alacritty.app/Contents/Resources`.
 
 ### Windows
 
@@ -151,11 +151,8 @@ scoop install alacritty
 
 ### Other
 
-Prebuilt binaries for Linux, macOS, and Windows can be downloaded from the
-[GitHub releases page](https://github.com/alacritty/alacritty/releases). If your
-desktop environment has trouble rendering the default SVG icons, you can find
-a prerendered SVG as well as simplified versions of the SVG in the
-`extra/logo/compat` directory.
+Prebuilt binaries for macOS, and Windows can be downloaded from the
+[GitHub releases page](https://github.com/alacritty/alacritty/releases).
 
 On Windows, Alacritty also requires Microsoft's VC++ redistributable.
 

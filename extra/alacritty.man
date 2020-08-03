@@ -1,4 +1,4 @@
-.TH ALACRITTY "1" "August 2018" "alacritty 0.5.0-dev" "User Commands"
+.TH ALACRITTY "1" "August 2018" "alacritty 0.6.0-dev" "User Commands"
 .SH NAME
 alacritty \- a cross-platform, gpu-accelerated terminal emulator
 .SH "SYNOPSIS"
@@ -42,8 +42,10 @@ Increases the level of verbosity (the max level is \fB\-vvv\fR)
 Prints version information
 .SH "OPTIONS"
 .TP
-\fB\-\-class\fR [ <instance> | <instance>,<general> ]
-Defines the window class hint on Linux [default: Alacritty,Alacritty ]
+\fB\-\-class\fR <instance> | <instance>,<general>
+Defines the window class hint on Linux [default: Alacritty,Alacritty]
+
+On Wayland the instance class sets the `app_id`, while the general class is ignored.
 .TP
 \fB\-e\fR, \fB\-\-command\fR <command>...
 Command and args to execute (must be last argument)

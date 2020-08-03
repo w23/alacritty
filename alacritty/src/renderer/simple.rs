@@ -1,5 +1,10 @@
 use {
     crate::{
+        config::{
+            font::{Font, FontDescription},
+            ui_config::{Delta, UIConfig},
+            window::{StartupMode, WindowConfig},
+        },
         gl,
         gl::types::*,
         renderer::{
@@ -8,7 +13,6 @@ use {
         },
     },
     alacritty_terminal::{
-        config::{self, Config, Delta, Font, StartupMode},
         index::{Column, Line},
         term::{
             self,
@@ -17,10 +21,16 @@ use {
             CursorKey, RenderableCell, RenderableCellContent, SizeInfo,
         },
     },
-    font::{BitmapBuffer, GlyphKey, RasterizedGlyph},
     log::*,
     std::{mem::size_of, path::PathBuf, ptr},
 };
+
+use crossfont::{
+    BitmapBuffer, FontDesc, FontKey, GlyphKey, Rasterize, RasterizedGlyph, Rasterizer, Size, Slant,
+    Style, Weight,
+};
+
+use alacritty_terminal::config::Cursor;
 
 fn create_shader(kind: GLenum, source: &str) -> Result<GLuint, ShaderCreationError> {
     let len: [GLint; 1] = [source.len() as GLint];
@@ -199,12 +209,12 @@ pub struct ScreenShaderProgram {
     u_atlas: GLint,
 }
 
-static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.f.glsl");
-static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.v.glsl");
+static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
+static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
 static SCREEN_SHADER_F: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.f.glsl"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
 static SCREEN_SHADER_V: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../res/screen.v.glsl"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl"));
 
 impl ScreenShaderProgram {
     #[cfg(feature = "live-shader-reload")]
@@ -478,16 +488,16 @@ impl GridAtlas {
             gl::BindTexture(gl::TEXTURE_2D, 0);
         }
 
-        eprintln!(
-            "{} {},{} {}x{} => l={} c={}",
-            rasterized.c,
-            rasterized.left,
-            rasterized.top,
-            rasterized.width,
-            rasterized.height,
-            line,
-            column
-        );
+        // eprintln!(
+        //     "{} {},{} {}x{} => l={} c={}",
+        //     rasterized.c,
+        //     rasterized.left,
+        //     rasterized.top,
+        //     rasterized.width,
+        //     rasterized.height,
+        //     line,
+        //     column
+        // );
 
         self.free_column += 1;
         if self.free_column == self.grid_width {
@@ -585,9 +595,15 @@ impl SimpleRenderer {
         //error!("draw_rects is not implemented");
     }
 
-    pub fn with_api<F, T, C>(&mut self, config: &Config<C>, props: &term::SizeInfo, func: F) -> T
+    pub fn with_api<F, T>(
+        &mut self,
+        config: &UIConfig,
+        cursor_config: Cursor,
+        props: &SizeInfo,
+        func: F,
+    ) -> T
     where
-        F: FnOnce(RenderApi<'_, C>) -> T,
+        F: FnOnce(RenderApi<'_>) -> T,
     {
         //eprintln!("clear");
         self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
@@ -725,14 +741,14 @@ impl SimpleRenderer {
 }
 
 #[derive(Debug)]
-pub struct RenderApi<'a, C> {
+pub struct RenderApi<'a> {
     seen_cells: bool,
     this: &'a mut SimpleRenderer,
     props: &'a term::SizeInfo,
-    config: &'a Config<C>,
+    config: &'a UIConfig,
 }
 
-impl<'a, C> RenderApi<'a, C> {
+impl<'a> RenderApi<'a> {
     pub fn clear(&self, color: Rgb) {
         debug!("clear");
         unsafe {
@@ -758,12 +774,13 @@ impl<'a, C> RenderApi<'a, C> {
     /// errors.
     pub fn render_string(
         &mut self,
-        string: &str,
-        line: Line,
         glyph_cache: &mut GlyphCache,
-        color: Option<Rgb>,
+        line: Line,
+        string: &str,
+        fg: Rgb,
+        bg: Option<Rgb>,
     ) {
-        //error!("render_string({}) not implemented", string);
+        error!("render_string({}) not implemented", string);
     }
 
     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
@@ -834,7 +851,7 @@ impl<'a, C> RenderApi<'a, C> {
     }
 }
 
-impl<'a, C> LoadGlyph for RenderApi<'a, C> {
+impl<'a> LoadGlyph for RenderApi<'a> {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
         self.this.load_glyph(rasterized)
     }
@@ -844,7 +861,7 @@ impl<'a, C> LoadGlyph for RenderApi<'a, C> {
     }
 }
 
-impl<'a, C> Drop for RenderApi<'a, C> {
+impl<'a> Drop for RenderApi<'a> {
     fn drop(&mut self) {
         if self.seen_cells {
             self.this.render(self.props);

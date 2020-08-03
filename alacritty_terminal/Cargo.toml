@@ -1,6 +1,6 @@
 [package]
 name = "alacritty_terminal"
-version = "0.5.0-dev"
+version = "0.10.1-dev"
 authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
 license = "Apache-2.0"
 description = "Library for writing terminal emulators"
@@ -11,7 +11,6 @@ edition = "2018"
 [dependencies]
 libc = "0.2"
 bitflags = "1"
-font = { path = "../font" }
 parking_lot = "0.10.2"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.8"
@@ -22,6 +21,7 @@ log = "0.4"
 unicode-width = "0.1"
 base64 = "0.12.0"
 terminfo = "0.7.1"
+regex-automata = "0.1.9"
 
 [target.'cfg(unix)'.dependencies]
 nix = "0.17.0"
@@ -37,12 +37,8 @@ winapi = { version = "0.3.7", features = [
 ]}
 mio-anonymous-pipes = "0.1"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2.2"
-
 [features]
 default = ["winpty"]
-nightly = []
 bench = []
 
 [dev-dependencies]

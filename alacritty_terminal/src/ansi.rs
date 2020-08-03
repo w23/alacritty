@@ -89,13 +89,13 @@ struct ProcessorState {
 ///
 /// Processor creates a Performer when running advance and passes the Performer
 /// to `vte::Parser`.
-struct Performer<'a, H: Handler + TermInfo, W: io::Write> {
+struct Performer<'a, H: Handler, W: io::Write> {
     state: &'a mut ProcessorState,
     handler: &'a mut H,
     writer: &'a mut W,
 }
 
-impl<'a, H: Handler + TermInfo + 'a, W: io::Write> Performer<'a, H, W> {
+impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Create a performer.
     #[inline]
     pub fn new<'b>(
@@ -121,18 +121,12 @@ impl Processor {
     #[inline]
     pub fn advance<H, W>(&mut self, handler: &mut H, byte: u8, writer: &mut W)
     where
-        H: Handler + TermInfo,
+        H: Handler,
         W: io::Write,
     {
         let mut performer = Performer::new(&mut self.state, handler, writer);
         self.parser.advance(&mut performer, byte);
     }
-}
-
-/// Trait that provides properties of terminal.
-pub trait TermInfo {
-    fn lines(&self) -> Line;
-    fn cols(&self) -> Column;
 }
 
 /// Type that handles actions from the parser.
@@ -170,7 +164,7 @@ pub trait Handler {
     /// Identify the terminal (should write back to the pty stream).
     ///
     /// TODO this should probably return an io::Result
-    fn identify_terminal<W: io::Write>(&mut self, _: &mut W) {}
+    fn identify_terminal<W: io::Write>(&mut self, _: &mut W, _intermediate: Option<char>) {}
 
     /// Report device status.
     fn device_status<W: io::Write>(&mut self, _: &mut W, _: usize) {}
@@ -278,7 +272,7 @@ pub trait Handler {
     fn unset_mode(&mut self, _: Mode) {}
 
     /// DECSTBM - Set the terminal scrolling region.
-    fn set_scrolling_region(&mut self, _top: usize, _bottom: usize) {}
+    fn set_scrolling_region(&mut self, _top: usize, _bottom: Option<usize>) {}
 
     /// DECKPAM - Set keypad to applications mode (ESCape instead of digits).
     fn set_keypad_application_mode(&mut self) {}
@@ -731,7 +725,7 @@ impl StandardCharset {
 
 impl<'a, H, W> vte::Perform for Performer<'a, H, W>
 where
-    H: Handler + TermInfo + 'a,
+    H: Handler + 'a,
     W: io::Write + 'a,
 {
     #[inline]
@@ -811,10 +805,6 @@ where
                 }
                 unhandled(params);
             },
-
-            // Set icon name.
-            // This is ignored, since alacritty has no concept of tabs.
-            b"1" => (),
 
             // Set color index.
             b"4" => {
@@ -949,9 +939,7 @@ where
 
         macro_rules! arg_or_default {
             (idx: $idx:expr, default: $default:expr) => {
-                args.get($idx)
-                    .and_then(|v| if *v == 0 { None } else { Some(*v) })
-                    .unwrap_or($default)
+                args.get($idx).copied().filter(|&v| v != 0).unwrap_or($default)
             };
         }
 
@@ -970,6 +958,9 @@ where
             ('A', None) => {
                 handler.move_up(Line(arg_or_default!(idx: 0, default: 1) as usize));
             },
+            ('B', None) | ('e', None) => {
+                handler.move_down(Line(arg_or_default!(idx: 0, default: 1) as usize))
+            },
             ('b', None) => {
                 if let Some(c) = self.state.preceding_char {
                     for _ in 0..arg_or_default!(idx: 0, default: 1) {
@@ -979,23 +970,26 @@ where
                     debug!("tried to repeat with no preceding char");
                 }
             },
-            ('B', None) | ('e', None) => {
-                handler.move_down(Line(arg_or_default!(idx: 0, default: 1) as usize))
-            },
-            ('c', None) if arg_or_default!(idx: 0, default: 0) == 0 => {
-                handler.identify_terminal(writer)
-            },
             ('C', None) | ('a', None) => {
                 handler.move_forward(Column(arg_or_default!(idx: 0, default: 1) as usize))
             },
+            ('c', intermediate) if arg_or_default!(idx: 0, default: 0) == 0 => {
+                handler.identify_terminal(writer, intermediate.map(|&i| i as char))
+            },
             ('D', None) => {
                 handler.move_backward(Column(arg_or_default!(idx: 0, default: 1) as usize))
+            },
+            ('d', None) => {
+                handler.goto_line(Line(arg_or_default!(idx: 0, default: 1) as usize - 1))
             },
             ('E', None) => {
                 handler.move_down_and_cr(Line(arg_or_default!(idx: 0, default: 1) as usize))
             },
             ('F', None) => {
                 handler.move_up_and_cr(Line(arg_or_default!(idx: 0, default: 1) as usize))
+            },
+            ('G', None) | ('`', None) => {
+                handler.goto_col(Column(arg_or_default!(idx: 0, default: 1) as usize - 1))
             },
             ('g', None) => {
                 let mode = match arg_or_default!(idx: 0, default: 0) {
@@ -1009,13 +1003,18 @@ where
 
                 handler.clear_tabs(mode);
             },
-            ('G', None) | ('`', None) => {
-                handler.goto_col(Column(arg_or_default!(idx: 0, default: 1) as usize - 1))
-            },
             ('H', None) | ('f', None) => {
                 let y = arg_or_default!(idx: 0, default: 1) as usize;
                 let x = arg_or_default!(idx: 1, default: 1) as usize;
                 handler.goto(Line(y - 1), Column(x - 1));
+            },
+            ('h', intermediate) => {
+                for arg in args {
+                    match Mode::from_primitive(intermediate, *arg) {
+                        Some(mode) => handler.set_mode(mode),
+                        None => unhandled!(),
+                    }
+                }
             },
             ('I', None) => handler.move_forward_tabs(arg_or_default!(idx: 0, default: 1)),
             ('J', None) => {
@@ -1045,13 +1044,6 @@ where
 
                 handler.clear_line(mode);
             },
-            ('S', None) => handler.scroll_up(Line(arg_or_default!(idx: 0, default: 1) as usize)),
-            ('t', None) => match arg_or_default!(idx: 0, default: 1) as usize {
-                22 => handler.push_title(),
-                23 => handler.pop_title(),
-                _ => unhandled!(),
-            },
-            ('T', None) => handler.scroll_down(Line(arg_or_default!(idx: 0, default: 1) as usize)),
             ('L', None) => {
                 handler.insert_blank_lines(Line(arg_or_default!(idx: 0, default: 1) as usize))
             },
@@ -1064,24 +1056,6 @@ where
                 }
             },
             ('M', None) => handler.delete_lines(Line(arg_or_default!(idx: 0, default: 1) as usize)),
-            ('X', None) => {
-                handler.erase_chars(Column(arg_or_default!(idx: 0, default: 1) as usize))
-            },
-            ('P', None) => {
-                handler.delete_chars(Column(arg_or_default!(idx: 0, default: 1) as usize))
-            },
-            ('Z', None) => handler.move_backward_tabs(arg_or_default!(idx: 0, default: 1)),
-            ('d', None) => {
-                handler.goto_line(Line(arg_or_default!(idx: 0, default: 1) as usize - 1))
-            },
-            ('h', intermediate) => {
-                for arg in args {
-                    match Mode::from_primitive(intermediate, *arg) {
-                        Some(mode) => handler.set_mode(mode),
-                        None => unhandled!(),
-                    }
-                }
-            },
             ('m', None) => {
                 if args.is_empty() {
                     handler.terminal_attribute(Attr::Reset);
@@ -1096,6 +1070,9 @@ where
             },
             ('n', None) => {
                 handler.device_status(writer, arg_or_default!(idx: 0, default: 0) as usize)
+            },
+            ('P', None) => {
+                handler.delete_chars(Column(arg_or_default!(idx: 0, default: 1) as usize))
             },
             ('q', Some(b' ')) => {
                 // DECSCUSR (CSI Ps SP q) -- Set Cursor Style.
@@ -1114,12 +1091,23 @@ where
             },
             ('r', None) => {
                 let top = arg_or_default!(idx: 0, default: 1) as usize;
-                let bottom = arg_or_default!(idx: 1, default: handler.lines().0 as _) as usize;
+                let bottom = args.get(1).map(|&b| b as usize).filter(|&b| b != 0);
 
                 handler.set_scrolling_region(top, bottom);
             },
+            ('S', None) => handler.scroll_up(Line(arg_or_default!(idx: 0, default: 1) as usize)),
             ('s', None) => handler.save_cursor_position(),
+            ('T', None) => handler.scroll_down(Line(arg_or_default!(idx: 0, default: 1) as usize)),
+            ('t', None) => match arg_or_default!(idx: 0, default: 1) as usize {
+                22 => handler.push_title(),
+                23 => handler.pop_title(),
+                _ => unhandled!(),
+            },
             ('u', None) => handler.restore_cursor_position(),
+            ('X', None) => {
+                handler.erase_chars(Column(arg_or_default!(idx: 0, default: 1) as usize))
+            },
+            ('Z', None) => handler.move_backward_tabs(arg_or_default!(idx: 0, default: 1)),
             _ => unhandled!(),
         }
     }
@@ -1160,7 +1148,7 @@ where
             },
             (b'H', None) => self.handler.set_horizontal_tabstop(),
             (b'M', None) => self.handler.reverse_index(),
-            (b'Z', None) => self.handler.identify_terminal(self.writer),
+            (b'Z', None) => self.handler.identify_terminal(self.writer, None),
             (b'c', None) => self.handler.reset_state(),
             (b'0', intermediate) => {
                 configure_charset!(StandardCharset::SpecialCharacterAndLineDrawing, intermediate)
@@ -1395,9 +1383,7 @@ pub mod C0 {
 mod tests {
     use super::{
         parse_number, xparse_color, Attr, CharsetIndex, Color, Handler, Processor, StandardCharset,
-        TermInfo,
     };
-    use crate::index::{Column, Line};
     use crate::term::color::Rgb;
     use std::io;
 
@@ -1422,22 +1408,12 @@ mod tests {
             self.index = index;
         }
 
-        fn identify_terminal<W: io::Write>(&mut self, _: &mut W) {
+        fn identify_terminal<W: io::Write>(&mut self, _: &mut W, _intermediate: Option<char>) {
             self.identity_reported = true;
         }
 
         fn reset_state(&mut self) {
             *self = Self::default();
-        }
-    }
-
-    impl TermInfo for MockHandler {
-        fn lines(&self) -> Line {
-            Line(200)
-        }
-
-        fn cols(&self) -> Column {
-            Column(90)
         }
     }
 

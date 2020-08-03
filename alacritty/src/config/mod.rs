@@ -4,16 +4,17 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-#[cfg(windows)]
-use dirs;
 use log::{error, warn};
 
 use alacritty_terminal::config::{Config as TermConfig, LOG_TARGET_CONFIG};
 
 mod bindings;
+pub mod debug;
+pub mod font;
 pub mod monitor;
 mod mouse;
-mod ui_config;
+pub mod ui_config;
+pub mod window;
 
 pub use crate::config::bindings::{Action, Binding, Key, ViAction};
 #[cfg(test)]
@@ -55,9 +56,9 @@ impl std::error::Error for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Error::NotFound => write!(f, "Couldn't locate config file"),
+            Error::NotFound => write!(f, "Unable to locate config file"),
             Error::ReadingEnvHome(err) => {
-                write!(f, "Couldn't read $HOME environment variable: {}", err)
+                write!(f, "Unable to read $HOME environment variable: {}", err)
             },
             Error::Io(err) => write!(f, "Error reading config file: {}", err),
             Error::Yaml(err) => write!(f, "Problem with config: {}", err),
@@ -172,27 +173,6 @@ fn parse_config(contents: &str) -> Result<Config> {
 }
 
 fn print_deprecation_warnings(config: &Config) {
-    if config.window.start_maximized.is_some() {
-        warn!(
-            target: LOG_TARGET_CONFIG,
-            "Config window.start_maximized is deprecated; please use window.startup_mode instead"
-        );
-    }
-
-    if config.render_timer.is_some() {
-        warn!(
-            target: LOG_TARGET_CONFIG,
-            "Config render_timer is deprecated; please use debug.render_timer instead"
-        );
-    }
-
-    if config.persistent_logging.is_some() {
-        warn!(
-            target: LOG_TARGET_CONFIG,
-            "Config persistent_logging is deprecated; please use debug.persistent_logging instead"
-        );
-    }
-
     if config.scrolling.faux_multiplier().is_some() {
         warn!(
             target: LOG_TARGET_CONFIG,
@@ -216,6 +196,20 @@ fn print_deprecation_warnings(config: &Config) {
             "Config tabspaces has been removed and is now always 8, it can be safely removed from \
              the config"
         );
+    }
+
+    if config.visual_bell.is_some() {
+        warn!(
+            target: LOG_TARGET_CONFIG,
+            "Config visual_bell has been deprecated; please use bell instead"
+        )
+    }
+
+    if config.ui_config.dynamic_title.is_some() {
+        warn!(
+            target: LOG_TARGET_CONFIG,
+            "Config dynamic_title is deprecated; please use window.dynamic_title instead",
+        )
     }
 }
 

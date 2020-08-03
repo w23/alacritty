@@ -1,37 +1,31 @@
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::message_bar::Message;
 use crate::term::{ClipboardType, SizeInfo};
 
 #[derive(Clone)]
 pub enum Event {
-    DPRChanged(f64, (u32, u32)),
-    ConfigReload(PathBuf),
     MouseCursorDirty,
-    Message(Message),
     Title(String),
+    ResetTitle,
     ClipboardStore(ClipboardType, String),
     ClipboardLoad(ClipboardType, Arc<dyn Fn(&str) -> String + Sync + Send + 'static>),
     Wakeup,
-    Urgent,
+    Bell,
     Exit,
 }
 
 impl Debug for Event {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Event::DPRChanged(scale, size) => write!(f, "DPRChanged({}, {:?})", scale, size),
-            Event::ConfigReload(path) => write!(f, "ConfigReload({:?})", path),
             Event::MouseCursorDirty => write!(f, "MouseCursorDirty"),
-            Event::Message(msg) => write!(f, "Message({:?})", msg),
             Event::Title(title) => write!(f, "Title({})", title),
+            Event::ResetTitle => write!(f, "ResetTitle"),
             Event::ClipboardStore(ty, text) => write!(f, "ClipboardStore({:?}, {})", ty, text),
             Event::ClipboardLoad(ty, _) => write!(f, "ClipboardLoad({:?})", ty),
             Event::Wakeup => write!(f, "Wakeup"),
-            Event::Urgent => write!(f, "Urgent"),
+            Event::Bell => write!(f, "Bell"),
             Event::Exit => write!(f, "Exit"),
         }
     }
