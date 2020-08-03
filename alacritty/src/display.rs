@@ -161,6 +161,9 @@ pub struct Display {
     meter: Meter,
     #[cfg(not(any(target_os = "macos", windows)))]
     is_x11: bool,
+
+    #[cfg(feature = "dump-raw-render-timings")]
+    timing_dump_file: std::fs::File,
 }
 
 impl Display {
@@ -313,6 +316,8 @@ impl Display {
             is_x11,
             #[cfg(not(any(target_os = "macos", windows)))]
             wayland_event_queue,
+            #[cfg(feature = "dump-raw-render-timings")]
+            timing_dump_file: std::fs::File::create("timing.dump").unwrap(),
         })
     }
 
@@ -485,6 +490,9 @@ impl Display {
         {
             let _sampler = self.meter.sampler();
 
+            #[cfg(feature = "dump-raw-render-timings")]
+            let start = Instant::now();
+
             self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
                 // Iterate over all non-empty cells in the grid.
                 for cell in grid_cells {
@@ -498,6 +506,16 @@ impl Display {
                     api.render_cell(cell, glyph_cache);
                 }
             });
+
+            #[cfg(feature = "dump-raw-render-timings")]
+            {
+								self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
+                    api.finish();
+                });
+
+                let dt = (Instant::now() - start).as_micros() as u32;
+                std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
+            }
         }
 
         let mut rects = lines.rects(&metrics, &size_info);
