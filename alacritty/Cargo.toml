@@ -63,5 +63,6 @@ wayland = ["copypasta/wayland"]
 winpty = ["alacritty_terminal/winpty"]
 # Enabling this feature makes shaders automatically reload when changed
 live-shader-reload = []
+dump-raw-render-timings = []
 nightly = []
 bench = []
