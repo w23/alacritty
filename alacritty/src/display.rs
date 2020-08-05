@@ -263,7 +263,7 @@ impl Display {
 
         // Clear screen.
         let background_color = config.colors.primary.background;
-        renderer.with_api(&config.ui_config, config.cursor, &size_info, |api| {
+        renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
             api.clear(background_color);
         });
 
@@ -479,7 +479,7 @@ impl Display {
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
-        self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |api| {
+        self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
             api.clear(background_color);
         });
 

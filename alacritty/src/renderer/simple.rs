@@ -433,7 +433,7 @@ impl GridAtlas {
 
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
         if rasterized.width > self.cell_width || rasterized.height > self.cell_height {
-            error!(
+            eprintln!(
                 "{} {},{} {}x{}",
                 rasterized.c, rasterized.left, rasterized.top, rasterized.width, rasterized.height,
             );
@@ -477,7 +477,7 @@ impl GridAtlas {
                 gl::TEXTURE_2D,
                 0,
                 std::cmp::max(0, column * self.cell_width + rasterized.left),
-                line * self.cell_height + self.cell_height - rasterized.top,
+                std::cmp::max(0, line * self.cell_height + self.cell_height - rasterized.top),
                 rasterized.width,
                 rasterized.height,
                 format,
@@ -605,12 +605,6 @@ impl SimpleRenderer {
     where
         F: FnOnce(RenderApi<'_>) -> T,
     {
-        //eprintln!("clear");
-        self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
-
-        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
-        self.screen_colors_bg.iter_mut().map(|x| *x = [0u8; 3]).count();
-
         func(RenderApi { seen_cells: false, this: self, props, config })
     }
 
@@ -749,8 +743,15 @@ pub struct RenderApi<'a> {
 }
 
 impl<'a> RenderApi<'a> {
-    pub fn clear(&self, color: Rgb) {
-        debug!("clear");
+    pub fn clear(&mut self, color: Rgb) {
+        self.this
+            .screen_glyphs_ref
+            .iter_mut()
+            .map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 })
+            .count();
+        self.this.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
+        self.this.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
+
         unsafe {
             let alpha = self.config.background_opacity();
             gl::ClearColor(
@@ -780,7 +781,7 @@ impl<'a> RenderApi<'a> {
         fg: Rgb,
         bg: Option<Rgb>,
     ) {
-        error!("render_string({}) not implemented", string);
+        //error!("render_string({}) not implemented", string);
     }
 
     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
