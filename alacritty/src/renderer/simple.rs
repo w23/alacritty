@@ -1,3 +1,4 @@
+use crate::cursor;
 use {
     crate::{
         config::{
@@ -205,6 +206,8 @@ pub struct ScreenShaderProgram {
     u_glyph_ref: GLint,
     u_color_fg: GLint,
     u_color_bg: GLint,
+    u_cursor: GLint,
+    u_cursor_color: GLint,
 
     u_atlas: GLint,
 }
@@ -228,6 +231,8 @@ impl ScreenShaderProgram {
             u_atlas: -1,
             u_color_fg: -1,
             u_color_bg: -1,
+            u_cursor: -1,
+            u_cursor_color: -1,
         };
         Ok(this)
     }
@@ -243,6 +248,8 @@ impl ScreenShaderProgram {
             u_atlas: -1,
             u_color_fg: -1,
             u_color_bg: -1,
+            u_cursor: -1,
+            u_cursor_color: -1,
         };
         this.update(true);
         Ok(this)
@@ -266,7 +273,7 @@ impl ScreenShaderProgram {
         }
 
         // get uniform locations
-        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref) = unsafe {
+        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref, cursor, cursor_color) = unsafe {
             (
                 gl::GetUniformLocation(self.program.id, cptr!(b"screenDim\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
@@ -274,11 +281,22 @@ impl ScreenShaderProgram {
                 gl::GetUniformLocation(self.program.id, cptr!(b"color_bg\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"color_fg\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"cursor\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"cursor_color\0")),
             )
         };
 
         if validate_uniforms {
-            assert_uniform_valid!(screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref);
+            assert_uniform_valid!(
+                screen_dim,
+                cell_dim,
+                atlas,
+                color_bg,
+                color_fg,
+                glyph_ref,
+                cursor,
+                cursor_color
+            );
         }
 
         self.u_screen_dim = screen_dim;
@@ -287,6 +305,8 @@ impl ScreenShaderProgram {
         self.u_atlas = atlas;
         self.u_color_fg = color_fg;
         self.u_color_bg = color_bg;
+        self.u_cursor = cursor;
+        self.u_cursor_color = cursor_color;
     }
 
     #[cfg(feature = "live-shader-reload")]
@@ -427,7 +447,7 @@ impl GridAtlas {
             cell_width,
             cell_height,
             free_line: 0,
-            free_column: 0,
+            free_column: 1,
         }
     }
 
@@ -544,6 +564,10 @@ pub struct SimpleRenderer {
     vbo: GLuint,
     columns: usize,
     lines: usize,
+
+    cursor_cell: [f32; 2],
+    cursor_glyph: [f32; 2],
+    cursor_color: Rgb,
 }
 
 impl SimpleRenderer {
@@ -582,11 +606,28 @@ impl SimpleRenderer {
             vbo,
             columns: 0,
             lines: 0,
+
+            cursor_cell: [-1.0; 2],
+            cursor_glyph: [-1.0; 2],
+            cursor_color: Rgb { r: 0, g: 0, b: 0 },
         };
 
         //eprintln!("renderer: {:?}", renderer);
 
         Ok(renderer)
+    }
+
+    pub fn set_cursor(
+        &mut self,
+        column: usize,
+        line: usize,
+        glyph_x: f32,
+        glyph_y: f32,
+        color: Rgb,
+    ) {
+        self.cursor_cell = [column as f32, line as f32];
+        self.cursor_glyph = [glyph_x, glyph_y];
+        self.cursor_color = color;
     }
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
@@ -604,7 +645,7 @@ impl SimpleRenderer {
     where
         F: FnOnce(RenderApi<'_>) -> T,
     {
-        func(RenderApi { seen_cells: false, this: self, props, config })
+        func(RenderApi { seen_cells: false, this: self, props, config, cursor_config })
     }
 
     pub fn with_loader<F, T>(&mut self, func: F) -> T
@@ -661,6 +702,19 @@ impl SimpleRenderer {
             gl::Uniform1i(self.program.u_glyph_ref, 1);
             gl::Uniform1i(self.program.u_color_fg, 2);
             gl::Uniform1i(self.program.u_color_bg, 3);
+            gl::Uniform4f(
+                self.program.u_cursor,
+                self.cursor_cell[0],
+                self.cursor_cell[1],
+                self.cursor_glyph[0],
+                self.cursor_glyph[1],
+            );
+            gl::Uniform3f(
+                self.program.u_cursor_color,
+                self.cursor_color.r as f32 / 255.,
+                self.cursor_color.g as f32 / 255.,
+                self.cursor_color.b as f32 / 255.,
+            );
 
             gl::BindTexture(gl::TEXTURE_2D, self.atlas.as_ref().unwrap().tex);
 
@@ -739,6 +793,7 @@ pub struct RenderApi<'a> {
     this: &'a mut SimpleRenderer,
     props: &'a term::SizeInfo,
     config: &'a UIConfig,
+    cursor_config: Cursor,
 }
 
 impl<'a> RenderApi<'a> {
@@ -785,56 +840,65 @@ impl<'a> RenderApi<'a> {
 
     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
         self.seen_cells = true;
-        let chars = match cell.inner {
-            RenderableCellContent::Cursor(cursor_key) => {
-                // Raw cell pixel buffers like cursors don't need to go through font lookup.
-                // let metrics = glyph_cache.metrics;
-                // let glyph = glyph_cache.cursor_cache.entry(cursor_key).or_insert_with(|| {
-                //     self.load_glyph(&cursor::get_cursor_glyph(
-                //         cursor_key.style,
-                //         metrics,
-                //         self.config.font.offset.x,
-                //         self.config.font.offset.y,
-                //         cursor_key.is_wide,
-                //         self.config.cursor.thickness(),
-                //     ))
-                // });
-                // self.add_render_item(cell, glyph);
-                debug!("???? lol cursor @{},{}", cell.line, cell.column);
-                return;
-            }
-            RenderableCellContent::Chars(chars) => chars,
-        };
-
-        // Get font key for cell.
-        let font_key = match cell.flags & Flags::BOLD_ITALIC {
-            Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
-            Flags::ITALIC => glyph_cache.italic_key,
-            Flags::BOLD => glyph_cache.bold_key,
-            _ => glyph_cache.font_key,
-        };
-
-        // Don't render text of HIDDEN cells.
-        let mut chars = if cell.flags.contains(Flags::HIDDEN) {
-            [' '; cell::MAX_ZEROWIDTH_CHARS + 1]
-        } else {
-            chars
-        };
-
-        // Render tabs as spaces in case the font doesn't support it.
-        if chars[0] == '\t' {
-            chars[0] = ' ';
-        }
-
-        let glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
 
         if self.this.atlas.is_none() {
             self.this.atlas = Some(GridAtlas::new(self.props));
         }
 
-        // Add cell to batch.
-        let glyph: Glyph = *glyph_cache.get(glyph_key, self);
+        let glyph = match cell.inner {
+            RenderableCellContent::Cursor(cursor_key) => {
+                // Raw cell pixel buffers like cursors don't need to go through font lookup.
+                let metrics = glyph_cache.metrics;
+                let glyph = glyph_cache.cursor_cache.entry(cursor_key).or_insert_with(|| {
+                    self.load_glyph(&cursor::get_cursor_glyph(
+                        cursor_key.style,
+                        metrics,
+                        self.config.font.offset.x,
+                        self.config.font.offset.y,
+                        cursor_key.is_wide,
+                        self.cursor_config.thickness(),
+                    ))
+                });
+                // self.add_render_item(cell, glyph);
+                //eprintln!("???? lol cursor @{},{} => {:?}", cell.line, cell.column, glyph);
+                self.this.set_cursor(
+                    cell.column.0,
+                    cell.line.0,
+                    glyph.uv_left,
+                    glyph.uv_bot,
+                    cell.fg,
+                );
+                return;
+            }
+            RenderableCellContent::Chars(chars) => {
+                // Get font key for cell.
+                let font_key = match cell.flags & Flags::BOLD_ITALIC {
+                    Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
+                    Flags::ITALIC => glyph_cache.italic_key,
+                    Flags::BOLD => glyph_cache.bold_key,
+                    _ => glyph_cache.font_key,
+                };
+
+                // Don't render text of HIDDEN cells.
+                let mut chars = if cell.flags.contains(Flags::HIDDEN) {
+                    [' '; cell::MAX_ZEROWIDTH_CHARS + 1]
+                } else {
+                    chars
+                };
+
+                // Render tabs as spaces in case the font doesn't support it.
+                if chars[0] == '\t' {
+                    chars[0] = ' ';
+                }
+
+                let glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
+                glyph_cache.get(glyph_key, self)
+            }
+        };
+
         let cell_index = cell.line.0 * self.this.columns + cell.column.0;
+
+        //eprintln!("{},{} {:?}", cell.line.0, cell.column.0, glyph);
 
         // put glyph reference into texture data
         self.this.screen_glyphs_ref[cell_index] = GlyphRef {
@@ -843,7 +907,10 @@ impl<'a> RenderApi<'a> {
             z: glyph.colored as u8,
             w: 0,
         };
-        //eprintln!("{}: {:?}", cell_index, self.this.screen_glyphs_ref[cell_index]);
+        // eprintln!(
+        //     "{},{} -> {}: {:?}",
+        //     cell.line.0, cell.column.0, cell_index, self.this.screen_glyphs_ref[cell_index]
+        // );
 
         self.this.screen_colors_fg[cell_index] =
             [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];

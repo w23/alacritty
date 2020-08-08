@@ -1,7 +1,5 @@
 #version 330 core
 
-//flat in vec4 bg;
-
 layout(location = 0, index = 0) out vec4 color;
 uniform sampler2D glyphRef;
 uniform sampler2D atlas;
@@ -9,9 +7,22 @@ uniform sampler2D color_fg;
 uniform sampler2D color_bg;
 uniform vec4 screenDim;
 uniform vec2 cellDim;
+uniform vec4 cursor;
+uniform vec3 cursor_color;
+
+vec3 drawGlyph(vec4 glyph, vec2 cell_uv, vec3 bg, vec3 fg) {
+	vec2 atlas_pix = (glyph.xy + cell_uv) * cellDim;
+	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
+
+	//return mask.rgb;
+
+	if (glyph.z > 0.)
+		return mix(bg, mask.rgb, mask.a);
+	else
+		return mix(bg, fg.rgb, mask.rgb);
+}
 
 void main() {
-	//color = vec4(texture(glyphRef, gl_FragCoord.xy / screenDim.zw).rgb, 1.);
 	vec2 uv = gl_FragCoord.xy;
 	uv.y = screenDim.w - uv.y;
 
@@ -27,61 +38,23 @@ void main() {
 		return;
 	}
 
-	//vec2 cell = floor(uv / cellDim);
 	vec2 cell_uv = fract(uv / cellDim);
-	//color = vec4(cell_uv, 0., 1.);
-	//color = vec4(cell / 16., 0., 1.);
 
 	vec2 tuv = (cell + .5) / vec2(textureSize(glyphRef, 0));
 	vec4 glyph = texture(glyphRef, tuv);
-	vec4 fg = texture(color_fg, tuv);
+	vec3 fg = texture(color_fg, tuv).rgb;
 	vec3 bg = texture(color_bg, tuv).rgb;
-	//color = vec4(fract(glyph.xy), 0., 1.);
-	//color = vec4(0., 1., 0., 1.);
-	color = vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1);
-	//color = vec4(texture(atlas, uv / vec2(1024.)).bbb, 1.);
 
-	//glyph.x = 1. - glyph.x;
-	//glyph.y = 1. - glyph.y;
-	//cell_uv.x = 1. - cell_uv.x;
+	color = vec4(bg, 1.);
 
-	vec2 atlas_pix = (glyph.xy * 255. + cell_uv) * cellDim;
-	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
+	if (cell == cursor.xy)
+		color = vec4(drawGlyph(vec4(cursor.zw, 0., 0.), cell_uv, color.rgb, cursor_color), 1.);
 
-	if (glyph.z > 0.) {
-		color = vec4(mix(bg, mask.rgb, mask.a), 1.);
-	} else {
-		color = vec4(mix(bg, fg.rgb, mask.rgb), 1.);
-	}
+	color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_uv, color.rgb, fg.rgb), 1.);
 
+	//color = vec4(fg.rgb, 1.);
+	//color = vec4(bg.rgb, 1.);
+	//color = vec4(mask.rgb, 1.);
+	//color = vec4(cursor_color, 1.);
 	//color = mix(color, vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1), 1.);
-
-	//color = vec4(texture(atlas, glyph.xy + glyph.zw * cell_uv).rgb, 1.);
-	//color = vec4(1., 0., 0., 1.);
-
-    // if (backgroundPass != 0) {
-    //     if (bg.a == 0.0)
-    //         discard;
-    //
-    //     alphaMask = vec4(1.0);
-    //     color = vec4(bg.rgb, 1.0);
-    // } else {
-    //     if (colored != 0) {
-    //         // Color glyphs, like emojis.
-    //         vec4 glyphColor = texture(mask, TexCoords);
-    //         alphaMask = vec4(glyphColor.a);
-    //
-    //         // Revert alpha premultiplication.
-    //         if (glyphColor.a != 0) {
-    //             glyphColor.rgb = vec3(glyphColor.rgb / glyphColor.a);
-    //         }
-    //
-    //         color = vec4(glyphColor.rgb, 1.0);
-    //     } else {
-    //         // Regular text glyphs.
-    //         vec3 textColor = texture(mask, TexCoords).rgb;
-    //         alphaMask = vec4(textColor, textColor.r);
-    //         color = vec4(fg, 1.0);
-    //     }
-    // }
 }
