@@ -10,7 +10,8 @@ use {
         gl::types::*,
         renderer::{
             clear_atlas, create_program, filewatch, get_shader_info_log, rects::RenderRect, Atlas,
-            Error, Glyph, GlyphCache, LoadGlyph, ShaderCreationError, ATLAS_SIZE,
+            Error, Glyph, GlyphCache, LoadGlyph, RectShaderProgram, ShaderCreationError,
+            ATLAS_SIZE,
         },
     },
     alacritty_terminal::{
@@ -453,7 +454,7 @@ impl GridAtlas {
 
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
         if rasterized.width > self.cell_width || rasterized.height > self.cell_height {
-            eprintln!(
+            debug!(
                 "{} {},{} {}x{}",
                 rasterized.c, rasterized.left, rasterized.top, rasterized.width, rasterized.height,
             );
@@ -561,6 +562,7 @@ pub struct SimpleRenderer {
     screen_colors_bg_tex: GLuint,
 
     program: ScreenShaderProgram,
+    vao: GLuint,
     vbo: GLuint,
     columns: usize,
     lines: usize,
@@ -568,6 +570,10 @@ pub struct SimpleRenderer {
     cursor_cell: [f32; 2],
     cursor_glyph: [f32; 2],
     cursor_color: Rgb,
+
+    rect_program: RectShaderProgram,
+    rect_vao: GLuint,
+    rect_vbo: GLuint,
 }
 
 impl SimpleRenderer {
@@ -575,10 +581,20 @@ impl SimpleRenderer {
         let screen_glyphs_ref_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA8) };
         let screen_colors_fg_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA8) };
         let screen_colors_bg_tex = unsafe { create_texture(256, 256, PixelFormat::RGB8) };
+
+        let mut vao: GLuint = 0;
         let mut vbo: GLuint = 0;
 
+        let mut rect_vao: GLuint = 0;
+        let mut rect_vbo: GLuint = 0;
+        let mut rect_ebo: GLuint = 0;
+
         unsafe {
-            let mut vao: GLuint = 0;
+            // gl::Enable(gl::BLEND);
+            // gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            gl::DepthMask(gl::FALSE);
+
             gl::GenVertexArrays(1, &mut vao);
             gl::BindVertexArray(vao);
 
@@ -591,6 +607,25 @@ impl SimpleRenderer {
                 vertices.as_ptr() as *const _,
                 gl::STREAM_DRAW,
             );
+
+            // Rectangle setup.
+            gl::GenVertexArrays(1, &mut rect_vao);
+            gl::GenBuffers(1, &mut rect_vbo);
+            gl::GenBuffers(1, &mut rect_ebo);
+            gl::BindVertexArray(rect_vao);
+            let indices: [i32; 6] = [0, 1, 3, 1, 2, 3];
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, rect_ebo);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (size_of::<i32>() * indices.len()) as _,
+                indices.as_ptr() as *const _,
+                gl::STATIC_DRAW,
+            );
+
+            // Cleanup.
+            gl::BindVertexArray(0);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
         }
 
         let mut renderer = Self {
@@ -603,6 +638,7 @@ impl SimpleRenderer {
             screen_colors_fg_tex,
             screen_colors_bg_tex,
             program: ScreenShaderProgram::new()?,
+            vao,
             vbo,
             columns: 0,
             lines: 0,
@@ -610,9 +646,11 @@ impl SimpleRenderer {
             cursor_cell: [-1.0; 2],
             cursor_glyph: [-1.0; 2],
             cursor_color: Rgb { r: 0, g: 0, b: 0 },
-        };
 
-        //eprintln!("renderer: {:?}", renderer);
+            rect_program: RectShaderProgram::new()?,
+            rect_vao,
+            rect_vbo,
+        };
 
         Ok(renderer)
     }
@@ -632,7 +670,93 @@ impl SimpleRenderer {
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
     pub fn draw_rects(&mut self, props: &term::SizeInfo, rects: Vec<RenderRect>) {
-        //error!("draw_rects is not implemented");
+        // Swap to rectangle rendering program.
+        unsafe {
+            // Swap program.
+            gl::UseProgram(self.rect_program.id);
+
+            // Remove padding from viewport.
+            gl::Viewport(0, 0, props.width as i32, props.height as i32);
+
+            // Change blending strategy.
+            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+
+            // Setup data and buffers.
+            gl::BindVertexArray(self.rect_vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.rect_vbo);
+
+            // Position.
+            gl::VertexAttribPointer(
+                0,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                (size_of::<f32>() * 2) as _,
+                ptr::null(),
+            );
+            gl::EnableVertexAttribArray(0);
+        }
+
+        // Draw all the rects.
+        for rect in rects {
+            self.render_rect(&rect, props);
+        }
+
+        // Deactivate rectangle program again.
+        unsafe {
+            // Reset blending strategy.
+            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
+
+            // Reset data and buffers.
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            let padding_x = props.padding_x as i32;
+            let padding_y = props.padding_y as i32;
+            let width = props.width as i32;
+            let height = props.height as i32;
+            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
+
+            // Disable program.
+            gl::UseProgram(0);
+        }
+    }
+
+    /// Render a rectangle.
+    ///
+    /// This requires the rectangle program to be activated.
+    fn render_rect(&mut self, rect: &RenderRect, size: &SizeInfo) {
+        // Do nothing when alpha is fully transparent.
+        if rect.alpha == 0. {
+            return;
+        }
+
+        // Calculate rectangle position.
+        let center_x = size.width / 2.;
+        let center_y = size.height / 2.;
+        let x = (rect.x - center_x) / center_x;
+        let y = -(rect.y - center_y) / center_y;
+        let width = rect.width / center_x;
+        let height = rect.height / center_y;
+
+        unsafe {
+            // Setup vertices.
+            let vertices: [f32; 8] = [x + width, y, x + width, y - height, x, y - height, x, y];
+
+            // Load vertex data into array buffer.
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (size_of::<f32>() * vertices.len()) as _,
+                vertices.as_ptr() as *const _,
+                gl::STATIC_DRAW,
+            );
+
+            // Color.
+            self.rect_program.set_color(rect.color, rect.alpha);
+
+            // Draw the rectangle.
+            gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
+        }
     }
 
     pub fn with_api<F, T>(
@@ -680,7 +804,6 @@ impl SimpleRenderer {
     }
 
     fn render(&mut self, props: &SizeInfo) {
-        //eprintln!("render");
         #[cfg(feature = "live-shader-reload")]
         {
             match self.program.poll() {
@@ -688,7 +811,7 @@ impl SimpleRenderer {
                     error!("shader error: {}", e);
                 }
                 Ok(updated) if updated => {
-                    eprintln!("updated shader: {:?}", self.program);
+                    debug!("updated shader: {:?}", self.program);
                 }
                 _ => {}
             }
@@ -720,7 +843,6 @@ impl SimpleRenderer {
 
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
-            //eprintln!("glyphs: {:?}", &self.screen_glyphs_ref[0..10]);
             upload_texture(
                 self.columns as i32,
                 self.lines as i32,
@@ -746,6 +868,7 @@ impl SimpleRenderer {
                 self.screen_colors_bg.as_ptr() as *const _,
             );
 
+            gl::BindVertexArray(self.vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
             gl::EnableVertexAttribArray(0);
@@ -753,6 +876,7 @@ impl SimpleRenderer {
             gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
             gl::DisableVertexAttribArray(0);
             gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindVertexArray(0);
         }
     }
 
@@ -835,7 +959,31 @@ impl<'a> RenderApi<'a> {
         fg: Rgb,
         bg: Option<Rgb>,
     ) {
-        //error!("render_string({}) not implemented", string);
+        debug!("render_string: {}", string);
+
+        let bg_alpha = bg.map(|_| 1.0).unwrap_or(0.0);
+
+        let cells = string
+            .chars()
+            .enumerate()
+            .map(|(i, c)| RenderableCell {
+                line,
+                column: Column(i),
+                inner: RenderableCellContent::Chars({
+                    let mut chars = [' '; cell::MAX_ZEROWIDTH_CHARS + 1];
+                    chars[0] = c;
+                    chars
+                }),
+                flags: Flags::empty(),
+                bg_alpha,
+                fg,
+                bg: bg.unwrap_or(Rgb { r: 0, g: 0, b: 0 }),
+            })
+            .collect::<Vec<_>>();
+
+        for cell in cells {
+            self.render_cell(cell, glyph_cache);
+        }
     }
 
     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
@@ -859,8 +1007,6 @@ impl<'a> RenderApi<'a> {
                         self.cursor_config.thickness(),
                     ))
                 });
-                // self.add_render_item(cell, glyph);
-                //eprintln!("???? lol cursor @{},{} => {:?}", cell.line, cell.column, glyph);
                 self.this.set_cursor(
                     cell.column.0,
                     cell.line.0,
@@ -898,8 +1044,6 @@ impl<'a> RenderApi<'a> {
 
         let cell_index = cell.line.0 * self.this.columns + cell.column.0;
 
-        //eprintln!("{},{} {:?}", cell.line.0, cell.column.0, glyph);
-
         // put glyph reference into texture data
         self.this.screen_glyphs_ref[cell_index] = GlyphRef {
             x: glyph.uv_left as u8,
@@ -907,10 +1051,14 @@ impl<'a> RenderApi<'a> {
             z: glyph.colored as u8,
             w: 0,
         };
-        // eprintln!(
-        //     "{},{} -> {}: {:?}",
-        //     cell.line.0, cell.column.0, cell_index, self.this.screen_glyphs_ref[cell_index]
-        // );
+
+        trace!(
+            "{},{} -> {}: {:?}",
+            cell.line.0,
+            cell.column.0,
+            cell_index,
+            self.this.screen_glyphs_ref[cell_index]
+        );
 
         self.this.screen_colors_fg[cell_index] =
             [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];

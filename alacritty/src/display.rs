@@ -584,7 +584,7 @@ impl Display {
                         Line(size_info.lines().saturating_sub(i + 1)),
                         &message_text,
                         fg,
-                        None,
+                        Some(message.color()),
                     );
                 });
             }
