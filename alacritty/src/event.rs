@@ -836,7 +836,8 @@ impl<N: Notify + OnResize> Processor<N> {
                 return;
             }
 
-            if terminal.dirty {
+            // :DDDDDDDDDDDDDDDDDD if terminal.dirty
+						{
                 terminal.dirty = false;
 
                 // Request immediate re-draw if visual bell animation is not finished yet.

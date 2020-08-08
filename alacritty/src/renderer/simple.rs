@@ -1,4 +1,6 @@
 use crate::cursor;
+use std::time::Duration;
+use std::time::Instant;
 use {
     crate::{
         config::{
@@ -211,6 +213,7 @@ pub struct ScreenShaderProgram {
     u_cursor_color: GLint,
 
     u_atlas: GLint,
+    u_time: GLint,
 }
 
 static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
@@ -234,6 +237,7 @@ impl ScreenShaderProgram {
             u_color_bg: -1,
             u_cursor: -1,
             u_cursor_color: -1,
+            u_time: -1,
         };
         Ok(this)
     }
@@ -251,6 +255,7 @@ impl ScreenShaderProgram {
             u_color_bg: -1,
             u_cursor: -1,
             u_cursor_color: -1,
+            u_time: -1,
         };
         this.update(true);
         Ok(this)
@@ -274,7 +279,17 @@ impl ScreenShaderProgram {
         }
 
         // get uniform locations
-        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref, cursor, cursor_color) = unsafe {
+        let (
+            screen_dim,
+            cell_dim,
+            atlas,
+            color_bg,
+            color_fg,
+            glyph_ref,
+            cursor,
+            cursor_color,
+            time,
+        ) = unsafe {
             (
                 gl::GetUniformLocation(self.program.id, cptr!(b"screenDim\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
@@ -284,6 +299,7 @@ impl ScreenShaderProgram {
                 gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cursor\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cursor_color\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"t\0")),
             )
         };
 
@@ -296,7 +312,8 @@ impl ScreenShaderProgram {
                 color_fg,
                 glyph_ref,
                 cursor,
-                cursor_color
+                cursor_color,
+                time
             );
         }
 
@@ -308,6 +325,7 @@ impl ScreenShaderProgram {
         self.u_color_bg = color_bg;
         self.u_cursor = cursor;
         self.u_cursor_color = cursor_color;
+        self.u_time = time;
     }
 
     #[cfg(feature = "live-shader-reload")]
@@ -574,6 +592,8 @@ pub struct SimpleRenderer {
     rect_program: RectShaderProgram,
     rect_vao: GLuint,
     rect_vbo: GLuint,
+
+    begin: Instant,
 }
 
 impl SimpleRenderer {
@@ -650,6 +670,8 @@ impl SimpleRenderer {
             rect_program: RectShaderProgram::new()?,
             rect_vao,
             rect_vbo,
+
+            begin: Instant::now(),
         };
 
         Ok(renderer)
@@ -821,6 +843,7 @@ impl SimpleRenderer {
             gl::UseProgram(self.program.program.id);
 
             self.program.set_term_uniforms(props);
+            gl::Uniform1f(self.program.u_time, self.begin.elapsed().as_micros() as f32 / 1e6);
             gl::Uniform1i(self.program.u_atlas, 0);
             gl::Uniform1i(self.program.u_glyph_ref, 1);
             gl::Uniform1i(self.program.u_color_fg, 2);
