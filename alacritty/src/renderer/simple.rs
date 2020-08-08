@@ -450,7 +450,6 @@ impl GridAtlas {
             return Err(AtlasError::Full);
         }
 
-        // TODO use
         let colored;
         let line = self.free_line;
         let column = self.free_column;
@@ -838,8 +837,12 @@ impl<'a> RenderApi<'a> {
         let cell_index = cell.line.0 * self.this.columns + cell.column.0;
 
         // put glyph reference into texture data
-        self.this.screen_glyphs_ref[cell_index] =
-            GlyphRef { x: glyph.uv_left as u8, y: glyph.uv_bot as u8, z: 0, w: 0 };
+        self.this.screen_glyphs_ref[cell_index] = GlyphRef {
+            x: glyph.uv_left as u8,
+            y: glyph.uv_bot as u8,
+            z: glyph.colored as u8,
+            w: 0,
+        };
         //eprintln!("{}: {:?}", cell_index, self.this.screen_glyphs_ref[cell_index]);
 
         self.this.screen_colors_fg[cell_index] =

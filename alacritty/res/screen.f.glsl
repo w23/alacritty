@@ -47,8 +47,12 @@ void main() {
 
 	vec2 atlas_pix = (glyph.xy * 255. + cell_uv) * cellDim;
 	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
-	//color = vec4(mask.rgb, 1.);
-	color = vec4(mix(bg, fg.rgb, mask.rgb), 1.);
+
+	if (glyph.z > 0.) {
+		color = vec4(mix(bg, mask.rgb, mask.a), 1.);
+	} else {
+		color = vec4(mix(bg, fg.rgb, mask.rgb), 1.);
+	}
 
 	//color = mix(color, vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1), 1.);
 
