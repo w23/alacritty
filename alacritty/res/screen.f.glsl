@@ -52,22 +52,18 @@ vec3 picsel(vec2 uv) {
 	vec2 cell = floor(uv / cellDim);
 	vec2 screen_cells = textureSize(glyphRef, 0);
 
-	if (any(lessThan(uv.xy, vec2(0.)))
-			|| any(greaterThanEqual(cell, screen_cells))
-	) {
-
 		float a = .4 + .2 * n1(t), b = a + .3 * n1(t+.5);
-		
-		//float ag = length(uv);
-		uv *= Rm(length(uv) * .001 + t * .3);// vec2(cos(ag), sin(ag))
+
+		float ag = length(uv);
+		vec2 tuv = uv * Rm(ag * .0005 * sin(t*.13)*2. + t * .3);// vec2(cos(ag), sin(ag))
 
 		//vec3 c = vec3(0., 0., 0.);
-		vec2 p = uv/100.;
+		vec2 p = tuv/100.;
 		vec3 c = vec3(.9,.8,.7) *
 				(step(fract(p.x-.5), .02) + step(fract(p.y-.5), .02)) *
 				step(length(fract(p)-.5), .3) * smoothstep(a, b, n2(floor(p)));
 
-		p = uv / 50.;
+		p = tuv / 50.;
 		p.x -= t;
 
 		a = .5 + .2 * n1(t*2.);
@@ -77,7 +73,7 @@ vec3 picsel(vec2 uv) {
 				(step(fract(p.x-.5), .03) + step(fract(p.y-.5), .03)) *
 				step(length(fract(p)-.5), .2) * smoothstep(a, b, n2(floor(p)));
 
-		p = uv / 20.;
+		p = tuv / 20.;
 		p.x -= t * 4.;
 
 		a = .5 + .2 * n1(t*1.3+4.);
@@ -87,8 +83,11 @@ vec3 picsel(vec2 uv) {
 				(step(fract(p.x-.5), .07) + step(fract(p.y-.5), .07)) *
 				step(length(fract(p)-.5), .4) * smoothstep(a, b, n2(floor(p)));
 
-		return c;
-	}
+		if (any(lessThan(uv.xy, vec2(0.)))
+				|| any(greaterThanEqual(cell, screen_cells))
+		) {
+			return c;
+		}
 
 	vec2 cell_uv = fract(uv / cellDim);
 
@@ -98,7 +97,7 @@ vec3 picsel(vec2 uv) {
 	/* 	- step(.9, n1(cell.x+t)) * mod(t*4., 5.) */
 	/* 	* step(y, cell.y) * step(cell.y, y+h); */
 
-	vec2 tuv = (cell + .5) / vec2(textureSize(glyphRef, 0));
+	tuv = (cell + .5) / vec2(textureSize(glyphRef, 0));
 	vec4 glyph = texture(glyphRef, tuv);
 	vec3 fg = texture(color_fg, tuv).rgb;
 	vec3 bg = texture(color_bg, tuv).rgb;
@@ -113,7 +112,8 @@ vec3 picsel(vec2 uv) {
 	//glyph.x += step(.9, n2(cell + floor(t))) * (16. * n2(tuv*100.));
 	//glyph.x += step(.99, h2(cell+mod(floor(t)*17.,5.)));// * (16. * n2(tuv*100.);
 
-	return drawGlyph(vec4(glyph.xy, glyph.zw), cell_uv, color, fg.rgb);
+	return mix(c, /* (.8 + .4*h2(cell+floor(fract(t)*128.))) * */ drawGlyph(vec4(glyph.xy, glyph.zw), cell_uv, color, fg.rgb), .8);
+	//return drawGlyph(vec4(glyph.xy, glyph.zw), cell_uv, color, fg.rgb);
 }
 
 void main() {
@@ -141,10 +141,20 @@ void main() {
 	for (float j = 0.; j < N; ++j) {
 		vec3 ac = vec3(1.);
 
-		vec3 O = vec3(1., .5, 3.3);
-		vec3 D = normalize(vec3(cuv, -2.));
-		D.xz *= Rm(.2 + .1 * sin(t*.7));
-		D.yz *= Rm(-.2 - .1 *cos(t*.3));
+		float la = h1(s+=j) * 6.28;
+		float lr = .05 * sqrt(h1(s+=.5));
+		float f = 3. + 2. * (n1(t) - .5);
+		float fov = .5;
+
+		vec3 at = vec3(cuv*fov, -1.) * f, O, D;
+
+			O = lr * vec3(cos(la), sin(la), 0.);
+			O.xz *= Rm(.2 + .1 * sin(t*.7));
+			O.yz *= Rm(-.2 - .1 *cos(t*.3));
+			D = normalize(at - O);
+			D.xz *= Rm(.2 + .1 * sin(t*.7));
+			D.yz *= Rm(-.2 - .1 *cos(t*.3));
+			O += vec3(1., .5, 3.3);
 
 		for (float i = 0.; i < 4.; ++i) {
 			s = mod(i+s, 100.);
@@ -167,7 +177,7 @@ void main() {
 				float rl = length(p.xy);
 				vec2 np = normalize(p.xy);
 				vec2 puv = (p.xy + vec2(2.5, 0.)) * 512.;
-				me = 1. * vec3(
+				me = 1.5 * vec3(
 						picsel(puv + rl * np * .8).r,
 						picsel(puv + rl * np * 1.6).g,
 						picsel(puv).b
