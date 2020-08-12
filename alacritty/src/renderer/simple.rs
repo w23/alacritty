@@ -1,18 +1,10 @@
 use crate::cursor;
 use {
     crate::{
-        config::{
-            font::{Font, FontDescription},
-            ui_config::{Delta, UIConfig},
-            window::{StartupMode, WindowConfig},
-        },
+        config::ui_config::UIConfig,
         gl,
         gl::types::*,
-        renderer::{
-            clear_atlas, create_program, filewatch, get_shader_info_log, rects::RenderRect, Atlas,
-            Error, Glyph, GlyphCache, LoadGlyph, RectShaderProgram, ShaderCreationError,
-            ATLAS_SIZE,
-        },
+        renderer::{rects::RenderRect, Error, Glyph, GlyphCache, LoadGlyph},
     },
     alacritty_terminal::{
         index::{Column, Line},
@@ -20,319 +12,20 @@ use {
             self,
             cell::{self, Flags, MAX_ZEROWIDTH_CHARS},
             color::Rgb,
-            CursorKey, RenderableCell, RenderableCellContent, SizeInfo,
+            RenderableCell, RenderableCellContent, SizeInfo,
         },
     },
     log::*,
-    std::{mem::size_of, path::PathBuf, ptr},
+    std::{mem::size_of, ptr},
 };
 
-use crossfont::{
-    BitmapBuffer, FontDesc, FontKey, GlyphKey, Rasterize, RasterizedGlyph, Rasterizer, Size, Slant,
-    Style, Weight,
-};
+use crossfont::{GlyphKey, RasterizedGlyph};
 
 use alacritty_terminal::config::Cursor;
 
-fn create_shader(kind: GLenum, source: &str) -> Result<GLuint, ShaderCreationError> {
-    let len: [GLint; 1] = [source.len() as GLint];
-
-    let shader = unsafe {
-        let shader = gl::CreateShader(kind);
-        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
-        gl::CompileShader(shader);
-        shader
-    };
-
-    let mut success: GLint = 0;
-    unsafe {
-        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
-    }
-
-    if success == GLint::from(gl::TRUE) {
-        Ok(shader)
-    } else {
-        // Read log.
-        let log = get_shader_info_log(shader);
-
-        // Cleanup.
-        unsafe {
-            gl::DeleteShader(shader);
-        }
-
-        Err(ShaderCreationError::Compile(PathBuf::new(), log))
-    }
-}
-
-#[derive(Debug)]
-struct Shader {
-    kind: GLuint,
-    id: GLuint,
-
-    #[cfg(feature = "live-shader-reload")]
-    file: filewatch::File,
-}
-
-impl Shader {
-    #[cfg(feature = "live-shader-reload")]
-    fn from_file(kind: GLuint, file_path: &str) -> Self {
-        Self { kind, id: 0, file: filewatch::File::new(std::path::Path::new(file_path)) }
-    }
-
-    #[cfg(not(feature = "live-shader-reload"))]
-    fn from_source(kind: GLuint, src: &str) -> Result<Self, ShaderCreationError> {
-        Ok(Self { kind, id: create_shader(kind, src)? })
-    }
-
-    fn valid(&self) -> bool {
-        self.id != 0
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
-        Ok(match self.file.read_update() {
-            Some(src) => {
-                let new_id = create_shader(self.kind, &src)?;
-                self.delete();
-                self.id = new_id;
-                true
-            }
-            _ => false,
-        })
-    }
-
-    fn delete(&mut self) {
-        if self.id > 0 {
-            unsafe {
-                gl::DeleteShader(self.id);
-            }
-        }
-    }
-}
-
-impl Drop for Shader {
-    fn drop(&mut self) {
-        self.delete();
-    }
-}
-
-#[derive(Debug)]
-pub struct ShaderProgram {
-    /// Program id
-    id: GLuint,
-
-    #[cfg(feature = "live-shader-reload")]
-    vertex_shader: Shader,
-
-    #[cfg(feature = "live-shader-reload")]
-    fragment_shader: Shader,
-}
-
-impl ShaderProgram {
-    #[cfg(not(feature = "live-shader-reload"))]
-    fn from_sources(vertex_src: &str, fragment_src: &str) -> Result<Self, ShaderCreationError> {
-        let vertex_shader = create_shader(gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader = create_shader(gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-        }
-
-        Ok(Self { id: program })
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    fn from_files(
-        vertex_path: &'static str,
-        fragment_path: &'static str,
-    ) -> Result<Self, ShaderCreationError> {
-        Ok(Self {
-            id: 0,
-            vertex_shader: Shader::from_file(gl::VERTEX_SHADER, vertex_path),
-            fragment_shader: Shader::from_file(gl::FRAGMENT_SHADER, fragment_path),
-        })
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    fn valid(&self) -> bool {
-        self.id != 0
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
-        Ok(
-            if (self.vertex_shader.poll()? || self.fragment_shader.poll()?)
-                && (self.fragment_shader.valid() && self.vertex_shader.valid())
-            {
-                let program = create_program(self.vertex_shader.id, self.fragment_shader.id)?;
-
-                if self.id > 0 {
-                    unsafe {
-                        gl::DeleteProgram(self.id);
-                    }
-                }
-
-                self.id = program;
-                true
-            } else {
-                false
-            },
-        )
-    }
-}
-
-impl Drop for ShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
-        }
-    }
-}
-
-/// Draw text using glyph refs
-///
-/// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
-#[derive(Debug)]
-pub struct ScreenShaderProgram {
-    program: ShaderProgram,
-
-    /// vec4(pad.xy, resolution.xy)
-    u_screen_dim: GLint,
-
-    /// Cell dimensions (pixels).
-    u_cell_dim: GLint,
-
-    u_glyph_ref: GLint,
-    u_color_fg: GLint,
-    u_color_bg: GLint,
-    u_cursor: GLint,
-    u_cursor_color: GLint,
-
-    u_atlas: GLint,
-}
-
-static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
-static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
-static SCREEN_SHADER_F: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
-static SCREEN_SHADER_V: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl"));
-
-impl ScreenShaderProgram {
-    #[cfg(feature = "live-shader-reload")]
-    pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let program = ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?;
-        let mut this = Self {
-            program,
-            u_screen_dim: -1,
-            u_cell_dim: -1,
-            u_glyph_ref: -1,
-            u_atlas: -1,
-            u_color_fg: -1,
-            u_color_bg: -1,
-            u_cursor: -1,
-            u_cursor_color: -1,
-        };
-        Ok(this)
-    }
-
-    #[cfg(not(feature = "live-shader-reload"))]
-    pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let program = ShaderProgram::from_sources(SCREEN_SHADER_V, SCREEN_SHADER_F)?;
-        let mut this = Self {
-            program,
-            u_screen_dim: -1,
-            u_cell_dim: -1,
-            u_glyph_ref: -1,
-            u_atlas: -1,
-            u_color_fg: -1,
-            u_color_bg: -1,
-            u_cursor: -1,
-            u_cursor_color: -1,
-        };
-        this.update(true);
-        Ok(this)
-    }
-
-    fn update(&mut self, validate_uniforms: bool) {
-        macro_rules! cptr {
-            ($thing:expr) => {
-                $thing.as_ptr() as *const _
-            };
-        }
-
-        macro_rules! assert_uniform_valid {
-            ($uniform:expr) => {
-                assert!($uniform != gl::INVALID_VALUE as i32);
-                assert!($uniform != gl::INVALID_OPERATION as i32);
-            };
-            ( $( $uniform:expr ),* ) => {
-                $( assert_uniform_valid!($uniform); )*
-            };
-        }
-
-        // get uniform locations
-        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref, cursor, cursor_color) = unsafe {
-            (
-                gl::GetUniformLocation(self.program.id, cptr!(b"screenDim\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"color_bg\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"color_fg\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cursor\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cursor_color\0")),
-            )
-        };
-
-        if validate_uniforms {
-            assert_uniform_valid!(
-                screen_dim,
-                cell_dim,
-                atlas,
-                color_bg,
-                color_fg,
-                glyph_ref,
-                cursor,
-                cursor_color
-            );
-        }
-
-        self.u_screen_dim = screen_dim;
-        self.u_cell_dim = cell_dim;
-        self.u_glyph_ref = glyph_ref;
-        self.u_atlas = atlas;
-        self.u_color_fg = color_fg;
-        self.u_color_bg = color_bg;
-        self.u_cursor = cursor;
-        self.u_cursor_color = cursor_color;
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    fn poll(&mut self) -> Result<bool, ShaderCreationError> {
-        if self.program.poll()? {
-            self.update(false);
-            return Ok(true);
-        }
-
-        Ok(false)
-    }
-
-    fn set_term_uniforms(&self, props: &term::SizeInfo) {
-        unsafe {
-            gl::Uniform4f(
-                self.u_screen_dim,
-                props.padding_x,
-                props.padding_y,
-                props.width,
-                props.height,
-            );
-            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
-        }
-    }
-}
+use super::atlas::*;
+use super::shade::*;
+use super::texture::*;
 
 #[derive(Debug, Clone)]
 struct GlyphRef {
@@ -340,213 +33,6 @@ struct GlyphRef {
     y: u8,
     z: u8,
     w: u8,
-}
-
-enum PixelFormat {
-    RGBA8,
-    RGB8,
-    RGBA32F,
-}
-
-struct TextureFormat {
-    internal: i32,
-    format: u32,
-    texel_type: u32,
-}
-
-fn get_gl_format(format: PixelFormat) -> TextureFormat {
-    match format {
-        PixelFormat::RGBA8 => TextureFormat {
-            internal: gl::RGBA as i32,
-            format: gl::RGBA,
-            texel_type: gl::UNSIGNED_BYTE,
-        },
-        PixelFormat::RGB8 => TextureFormat {
-            internal: gl::RGB as i32,
-            format: gl::RGB,
-            texel_type: gl::UNSIGNED_BYTE,
-        },
-        PixelFormat::RGBA32F => {
-            TextureFormat { internal: gl::RGBA32F as i32, format: gl::RGBA, texel_type: gl::FLOAT }
-        }
-    }
-}
-
-unsafe fn upload_texture(width: i32, height: i32, format: PixelFormat, ptr: *const f32) {
-    let format = get_gl_format(format);
-    gl::TexImage2D(
-        gl::TEXTURE_2D,
-        0,
-        format.internal,
-        width,
-        height,
-        0,
-        format.format,
-        format.texel_type,
-        ptr as *const _,
-    );
-}
-
-unsafe fn create_texture(width: i32, height: i32, format: PixelFormat) -> GLuint {
-    let mut id: GLuint = 0;
-    let format = get_gl_format(format);
-
-    gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-
-    gl::GenTextures(1, &mut id);
-    gl::BindTexture(gl::TEXTURE_2D, id);
-    gl::TexImage2D(
-        gl::TEXTURE_2D,
-        0,
-        format.internal,
-        width,
-        height,
-        0,
-        format.format,
-        format.texel_type,
-        ptr::null(),
-    );
-
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-
-    gl::BindTexture(gl::TEXTURE_2D, 0);
-    id
-}
-
-// TODO figure out dynamically based on GL caps
-static GRID_ATLAS_SIZE: i32 = 1024;
-
-#[derive(Debug)]
-enum AtlasError {
-    TooBig { w: i32, h: i32, cw: i32, ch: i32 },
-    Full,
-}
-
-#[derive(Debug)]
-struct GridAtlas {
-    tex: GLuint,
-    cell_width: i32,
-    cell_height: i32,
-    grid_width: i32,
-    grid_height: i32,
-    free_line: i32,
-    free_column: i32,
-}
-
-impl GridAtlas {
-    fn new(props: &term::SizeInfo) -> Self {
-        // FIXME limit atlas size by 256x256 cells
-        let cell_width = props.cell_width as i32;
-        let cell_height = props.cell_height as i32;
-        Self {
-            tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
-            grid_width: GRID_ATLAS_SIZE / cell_width,
-            grid_height: GRID_ATLAS_SIZE / cell_height,
-            cell_width,
-            cell_height,
-            free_line: 0,
-            free_column: 1,
-        }
-    }
-
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
-        if rasterized.width > self.cell_width || rasterized.height > self.cell_height {
-            debug!(
-                "{} {},{} {}x{}",
-                rasterized.c, rasterized.left, rasterized.top, rasterized.width, rasterized.height,
-            );
-
-            // return Err(AtlasError::TooBig {
-            //     w: rasterized.width,
-            //     h: rasterized.height,
-            //     cw: self.cell_width,
-            //     ch: self.cell_height,
-            // });
-        }
-
-        if self.free_line >= self.cell_height {
-            return Err(AtlasError::Full);
-        }
-
-        let colored;
-        let line = self.free_line;
-        let column = self.free_column;
-
-        unsafe {
-            gl::BindTexture(gl::TEXTURE_2D, self.tex);
-
-            // Load data into OpenGL.
-            let (format, buf) = match &rasterized.buf {
-                BitmapBuffer::RGB(buf) => {
-                    colored = false;
-                    (gl::RGB, buf)
-                }
-                BitmapBuffer::RGBA(buf) => {
-                    colored = true;
-                    (gl::RGBA, buf)
-                }
-            };
-
-            // TODO optimize
-            // 1. only copy into internal storage
-            // 2. upload once before drawing by column/line subrect
-            gl::TexSubImage2D(
-                gl::TEXTURE_2D,
-                0,
-                std::cmp::max(0, column * self.cell_width + rasterized.left),
-                std::cmp::max(0, line * self.cell_height + self.cell_height - rasterized.top),
-                rasterized.width,
-                rasterized.height,
-                format,
-                gl::UNSIGNED_BYTE,
-                buf.as_ptr() as *const _,
-            );
-
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-        }
-
-        // eprintln!(
-        //     "{} {},{} {}x{} => l={} c={}",
-        //     rasterized.c,
-        //     rasterized.left,
-        //     rasterized.top,
-        //     rasterized.width,
-        //     rasterized.height,
-        //     line,
-        //     column
-        // );
-
-        self.free_column += 1;
-        if self.free_column == self.grid_width {
-            self.free_column = 0;
-            self.free_line += 1;
-        }
-
-        // TODO make Glyph enum
-        Ok(Glyph {
-            tex_id: self.tex,
-            colored,
-            top: 0.0,
-            left: 0.0,
-            width: 0.0,
-            height: 0.0,
-            uv_bot: line as f32,
-            uv_left: column as f32,
-            uv_width: 0.0,
-            uv_height: 0.0,
-        })
-    }
-}
-
-impl Drop for GridAtlas {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteTextures(1, &mut self.tex);
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -993,7 +479,7 @@ impl<'a> RenderApi<'a> {
             self.this.atlas = Some(GridAtlas::new(self.props));
         }
 
-        let glyph = match cell.inner {
+        match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
                 let metrics = glyph_cache.metrics;
@@ -1014,8 +500,9 @@ impl<'a> RenderApi<'a> {
                     glyph.uv_bot,
                     cell.fg,
                 );
-                return;
             }
+
+            // こんにちは
             RenderableCellContent::Chars(chars) => {
                 // Get font key for cell.
                 let font_key = match cell.flags & Flags::BOLD_ITALIC {
@@ -1037,36 +524,53 @@ impl<'a> RenderApi<'a> {
                     chars[0] = ' ';
                 }
 
+                let wide = match cell.flags & Flags::WIDE_CHAR {
+                    Flags::WIDE_CHAR => true,
+                    _ => false,
+                };
                 let glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
-                glyph_cache.get(glyph_key, self)
+                let glyph = glyph_cache.get(glyph_key, self);
+
+                let cell_index = cell.line.0 * self.this.columns + cell.column.0;
+
+                trace!(
+                    "{},{} -> {}: {:?}",
+                    cell.line.0,
+                    cell.column.0,
+                    cell_index,
+                    self.this.screen_glyphs_ref[cell_index]
+                );
+
+                // put glyph reference into texture data
+                self.this.screen_glyphs_ref[cell_index] = GlyphRef {
+                    x: glyph.uv_left as u8,
+                    y: glyph.uv_bot as u8,
+                    z: glyph.colored as u8,
+                    w: 0,
+                };
+
+                self.this.screen_colors_fg[cell_index] =
+                    [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
+
+                self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
+
+                if wide && cell.column.0 < self.this.columns {
+                    let cell_index = cell_index + 1;
+                    self.this.screen_glyphs_ref[cell_index] = GlyphRef {
+                        x: glyph.uv_left as u8 + 1,
+                        y: glyph.uv_bot as u8,
+                        z: glyph.colored as u8,
+                        w: 0,
+                    };
+                    self.this.screen_colors_fg[cell_index] =
+                        [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
+                    self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
+                }
+
+                // FIXME Render zero-width characters.
+                // FIXME Ligatures? How do they work?
             }
         };
-
-        let cell_index = cell.line.0 * self.this.columns + cell.column.0;
-
-        // put glyph reference into texture data
-        self.this.screen_glyphs_ref[cell_index] = GlyphRef {
-            x: glyph.uv_left as u8,
-            y: glyph.uv_bot as u8,
-            z: glyph.colored as u8,
-            w: 0,
-        };
-
-        trace!(
-            "{},{} -> {}: {:?}",
-            cell.line.0,
-            cell.column.0,
-            cell_index,
-            self.this.screen_glyphs_ref[cell_index]
-        );
-
-        self.this.screen_colors_fg[cell_index] =
-            [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
-
-        self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
-
-        // FIXME Render zero-width characters.
-        // FIXME Ligatures? How do they work?
     }
 }
 

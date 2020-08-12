@@ -1,13 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
-use std::fs;
 use std::hash::BuildHasherDefault;
-use std::io;
 use std::mem::size_of;
-use std::path::PathBuf;
 use std::ptr;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use crossfont::{
     BitmapBuffer, FontDesc, FontKey, GlyphKey, Rasterize, RasterizedGlyph, Rasterizer, Size, Slant,
@@ -15,14 +11,12 @@ use crossfont::{
 };
 use fnv::FnvHasher;
 use log::{error, info};
-use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
 
 use alacritty_terminal::config::Cursor;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{self, Flags};
 use alacritty_terminal::term::color::Rgb;
 use alacritty_terminal::term::{CursorKey, RenderableCell, RenderableCellContent, SizeInfo};
-use alacritty_terminal::thread;
 
 use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::{Delta, UIConfig};
@@ -32,21 +26,15 @@ use crate::gl;
 use crate::gl::types::*;
 use crate::renderer::rects::RenderRect;
 
+use shade::*;
+
+mod atlas;
 mod filewatch;
+mod shade;
+mod texture;
+
 pub mod rects;
 pub mod simple;
-
-// Shader paths for live reload.
-static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.f.glsl");
-static TEXT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.v.glsl");
-static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
-static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
-
-// Shader source which is used when live-shader-reload feature is disable.
-static TEXT_SHADER_F: &str = include_str!("../../res/text.f.glsl");
-static TEXT_SHADER_V: &str = include_str!("../../res/text.v.glsl");
-static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
-static RECT_SHADER_V: &str = include_str!("../../res/rect.v.glsl");
 
 /// `LoadGlyph` allows for copying a rasterized glyph into graphics memory.
 pub trait LoadGlyph {
@@ -81,7 +69,7 @@ impl Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            },
+            }
         }
     }
 }
@@ -90,37 +78,6 @@ impl From<ShaderCreationError> for Error {
     fn from(val: ShaderCreationError) -> Self {
         Error::ShaderCreation(val)
     }
-}
-
-/// Text drawing program.
-///
-/// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
-#[derive(Debug)]
-pub struct TextShaderProgram {
-    /// Program id.
-    id: GLuint,
-
-    /// Projection scale and offset uniform.
-    u_projection: GLint,
-
-    /// Cell dimensions (pixels).
-    u_cell_dim: GLint,
-
-    /// Background pass flag.
-    ///
-    /// Rendering is split into two passes; 1 for backgrounds, and one for text.
-    u_background: GLint,
-}
-
-/// Rectangle drawing program.
-///
-/// Uniforms are prefixed with "u".
-#[derive(Debug)]
-pub struct RectShaderProgram {
-    /// Program id.
-    id: GLuint,
-    /// Rectangle color.
-    u_color: GLint,
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -268,7 +225,7 @@ impl GlyphCache {
                 let fallback_desc =
                     Self::make_desc(&Font::default().normal(), Slant::Normal, Weight::Normal);
                 rasterizer.load_font(&fallback_desc, size)
-            },
+            }
         }
     }
 
@@ -673,35 +630,6 @@ impl QuadRenderer {
 
         let (msg_tx, msg_rx) = mpsc::channel();
 
-        if cfg!(feature = "live-shader-reload") {
-            thread::spawn_named("live shader reload", move || {
-                let (tx, rx) = std::sync::mpsc::channel();
-                // The Duration argument is a debouncing period.
-                let mut watcher =
-                    watcher(tx, Duration::from_millis(10)).expect("create file watcher");
-                watcher
-                    .watch(TEXT_SHADER_F_PATH, RecursiveMode::NonRecursive)
-                    .expect("watch fragment shader");
-                watcher
-                    .watch(TEXT_SHADER_V_PATH, RecursiveMode::NonRecursive)
-                    .expect("watch vertex shader");
-
-                loop {
-                    let event = rx.recv().expect("watcher event");
-
-                    match event {
-                        DebouncedEvent::Rename(..) => continue,
-                        DebouncedEvent::Create(_)
-                        | DebouncedEvent::Write(_)
-                        | DebouncedEvent::Chmod(_) => {
-                            msg_tx.send(Msg::ShaderReload).expect("msg send ok");
-                        },
-                        _ => {},
-                    }
-                }
-            });
-        }
-
         let mut renderer = Self {
             program,
             rect_program,
@@ -787,12 +715,6 @@ impl QuadRenderer {
     where
         F: FnOnce(RenderApi<'_>) -> T,
     {
-        // Flush message queue.
-        if let Ok(Msg::ShaderReload) = self.rx.try_recv() {
-            self.reload_shaders(props);
-        }
-        while self.rx.try_recv().is_ok() {}
-
         unsafe {
             gl::UseProgram(self.program.id);
             self.program.set_term_uniforms(props);
@@ -857,11 +779,11 @@ impl QuadRenderer {
 
                 info!("... successfully reloaded shaders");
                 (program, rect_program)
-            },
+            }
             (Err(err), _) | (_, Err(err)) => {
                 error!("{}", err);
                 return;
-            },
+            }
         };
 
         self.active_tex = 0;
@@ -1052,7 +974,7 @@ impl<'a> RenderApi<'a> {
                 });
                 self.add_render_item(cell, glyph);
                 return;
-            },
+            }
             RenderableCellContent::Chars(chars) => chars,
         };
 
@@ -1121,7 +1043,7 @@ pub fn load_glyph(
                 atlas.push(new);
             }
             load_glyph(active_tex, atlas, current_atlas, rasterized)
-        },
+        }
         Err(AtlasInsertError::GlyphTooLarge) => Glyph {
             tex_id: atlas[*current_atlas].id,
             colored: false,
@@ -1170,301 +1092,6 @@ impl<'a> Drop for RenderApi<'a> {
         if !self.batch.is_empty() {
             self.render_batch();
         }
-    }
-}
-
-impl TextShaderProgram {
-    pub fn new() -> Result<TextShaderProgram, ShaderCreationError> {
-        let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
-            (None, None)
-        } else {
-            (Some(TEXT_SHADER_V), Some(TEXT_SHADER_F))
-        };
-        let vertex_shader = create_shader(TEXT_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader = create_shader(TEXT_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
-        }
-
-        macro_rules! cptr {
-            ($thing:expr) => {
-                $thing.as_ptr() as *const _
-            };
-        }
-
-        macro_rules! assert_uniform_valid {
-            ($uniform:expr) => {
-                assert!($uniform != gl::INVALID_VALUE as i32);
-                assert!($uniform != gl::INVALID_OPERATION as i32);
-            };
-            ( $( $uniform:expr ),* ) => {
-                $( assert_uniform_valid!($uniform); )*
-            };
-        }
-
-        // get uniform locations
-        let (projection, cell_dim, background) = unsafe {
-            (
-                gl::GetUniformLocation(program, cptr!(b"projection\0")),
-                gl::GetUniformLocation(program, cptr!(b"cellDim\0")),
-                gl::GetUniformLocation(program, cptr!(b"backgroundPass\0")),
-            )
-        };
-
-        assert_uniform_valid!(projection, cell_dim, background);
-
-        let shader = Self {
-            id: program,
-            u_projection: projection,
-            u_cell_dim: cell_dim,
-            u_background: background,
-        };
-
-        unsafe {
-            gl::UseProgram(0);
-        }
-
-        Ok(shader)
-    }
-
-    fn update_projection(&self, width: f32, height: f32, padding_x: f32, padding_y: f32) {
-        // Bounds check.
-        if (width as u32) < (2 * padding_x as u32) || (height as u32) < (2 * padding_y as u32) {
-            return;
-        }
-
-        // Compute scale and offset factors, from pixel to ndc space. Y is inverted.
-        //   [0, width - 2 * padding_x] to [-1, 1]
-        //   [height - 2 * padding_y, 0] to [-1, 1]
-        let scale_x = 2. / (width - 2. * padding_x);
-        let scale_y = -2. / (height - 2. * padding_y);
-        let offset_x = -1.;
-        let offset_y = 1.;
-
-        info!("Width: {}, Height: {}", width, height);
-
-        unsafe {
-            gl::Uniform4f(self.u_projection, offset_x, offset_y, scale_x, scale_y);
-        }
-    }
-
-    fn set_term_uniforms(&self, props: &SizeInfo) {
-        unsafe {
-            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
-        }
-    }
-
-    fn set_background_pass(&self, background_pass: bool) {
-        let value = if background_pass { 1 } else { 0 };
-
-        unsafe {
-            gl::Uniform1i(self.u_background, value);
-        }
-    }
-}
-
-impl Drop for TextShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
-        }
-    }
-}
-
-impl RectShaderProgram {
-    pub fn new() -> Result<Self, ShaderCreationError> {
-        let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
-            (None, None)
-        } else {
-            (Some(RECT_SHADER_V), Some(RECT_SHADER_F))
-        };
-        let vertex_shader = create_shader(RECT_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader = create_shader(RECT_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
-        }
-
-        // Get uniform locations.
-        let u_color = unsafe { gl::GetUniformLocation(program, b"color\0".as_ptr() as *const _) };
-
-        let shader = Self { id: program, u_color };
-
-        unsafe { gl::UseProgram(0) }
-
-        Ok(shader)
-    }
-
-    fn set_color(&self, color: Rgb, alpha: f32) {
-        unsafe {
-            gl::Uniform4f(
-                self.u_color,
-                f32::from(color.r) / 255.,
-                f32::from(color.g) / 255.,
-                f32::from(color.b) / 255.,
-                alpha,
-            );
-        }
-    }
-}
-
-impl Drop for RectShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
-        }
-    }
-}
-
-pub fn create_program(vertex: GLuint, fragment: GLuint) -> Result<GLuint, ShaderCreationError> {
-    unsafe {
-        let program = gl::CreateProgram();
-        gl::AttachShader(program, vertex);
-        gl::AttachShader(program, fragment);
-        gl::LinkProgram(program);
-
-        let mut success: GLint = 0;
-        gl::GetProgramiv(program, gl::LINK_STATUS, &mut success);
-
-        if success == i32::from(gl::TRUE) {
-            Ok(program)
-        } else {
-            Err(ShaderCreationError::Link(get_program_info_log(program)))
-        }
-    }
-}
-
-pub fn create_shader(
-    path: &str,
-    kind: GLenum,
-    source: Option<&'static str>,
-) -> Result<GLuint, ShaderCreationError> {
-    let from_disk;
-    let source = if let Some(src) = source {
-        src
-    } else {
-        from_disk = fs::read_to_string(path)?;
-        &from_disk[..]
-    };
-
-    let len: [GLint; 1] = [source.len() as GLint];
-
-    let shader = unsafe {
-        let shader = gl::CreateShader(kind);
-        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
-        gl::CompileShader(shader);
-        shader
-    };
-
-    let mut success: GLint = 0;
-    unsafe {
-        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
-    }
-
-    if success == GLint::from(gl::TRUE) {
-        Ok(shader)
-    } else {
-        // Read log.
-        let log = get_shader_info_log(shader);
-
-        // Cleanup.
-        unsafe {
-            gl::DeleteShader(shader);
-        }
-
-        Err(ShaderCreationError::Compile(PathBuf::from(path), log))
-    }
-}
-
-fn get_program_info_log(program: GLuint) -> String {
-    // Get expected log length.
-    let mut max_length: GLint = 0;
-    unsafe {
-        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut max_length);
-    }
-
-    // Read the info log.
-    let mut actual_length: GLint = 0;
-    let mut buf: Vec<u8> = Vec::with_capacity(max_length as usize);
-    unsafe {
-        gl::GetProgramInfoLog(program, max_length, &mut actual_length, buf.as_mut_ptr() as *mut _);
-    }
-
-    // Build a string.
-    unsafe {
-        buf.set_len(actual_length as usize);
-    }
-
-    // XXX should we expect OpenGL to return garbage?
-    String::from_utf8(buf).unwrap()
-}
-
-pub fn get_shader_info_log(shader: GLuint) -> String {
-    // Get expected log length.
-    let mut max_length: GLint = 0;
-    unsafe {
-        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut max_length);
-    }
-
-    // Read the info log.
-    let mut actual_length: GLint = 0;
-    let mut buf: Vec<u8> = Vec::with_capacity(max_length as usize);
-    unsafe {
-        gl::GetShaderInfoLog(shader, max_length, &mut actual_length, buf.as_mut_ptr() as *mut _);
-    }
-
-    // Build a string.
-    unsafe {
-        buf.set_len(actual_length as usize);
-    }
-
-    // XXX should we expect OpenGL to return garbage?
-    String::from_utf8(buf).unwrap()
-}
-
-#[derive(Debug)]
-pub enum ShaderCreationError {
-    /// Error reading file.
-    Io(io::Error),
-
-    /// Error compiling shader.
-    Compile(PathBuf, String),
-
-    /// Problem linking.
-    Link(String),
-}
-
-impl std::error::Error for ShaderCreationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ShaderCreationError::Io(err) => err.source(),
-            _ => None,
-        }
-    }
-}
-
-impl Display for ShaderCreationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            ShaderCreationError::Io(err) => write!(f, "Unable to read shader: {}", err),
-            ShaderCreationError::Compile(path, log) => {
-                write!(f, "Failed compiling shader at {}: {}", path.display(), log)
-            },
-            ShaderCreationError::Link(log) => write!(f, "Failed linking shader: {}", log),
-        }
-    }
-}
-
-impl From<io::Error> for ShaderCreationError {
-    fn from(val: io::Error) -> Self {
-        ShaderCreationError::Io(val)
     }
 }
 
@@ -1603,11 +1230,11 @@ impl Atlas {
                 BitmapBuffer::RGB(buf) => {
                     colored = false;
                     (gl::RGB, buf)
-                },
+                }
                 BitmapBuffer::RGBA(buf) => {
                     colored = true;
                     (gl::RGBA, buf)
-                },
+                }
             };
 
             gl::TexSubImage2D(
