@@ -10,9 +10,12 @@ uniform vec2 cellDim;
 uniform vec4 cursor;
 uniform vec3 cursor_color;
 
+const float atlas_grid_factor = 2.;
+
 vec3 drawGlyph(vec4 glyph, vec2 cell_uv, vec3 bg, vec3 fg) {
-	vec2 atlas_pix = (glyph.xy + cell_uv) * cellDim;
-	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
+	//vec2 atlas_pix = (glyph.xy + cell_uv) * cellDim * atlas_grid_factor;
+	vec2 atlas_pix = (glyph.xy * atlas_grid_factor + .5 + cell_uv) * cellDim;
+	vec4 mask = texture(atlas, (floor(atlas_pix) + .5) / textureSize(atlas, 0));
 
 	//return mask.rgb;
 

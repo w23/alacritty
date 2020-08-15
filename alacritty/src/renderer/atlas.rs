@@ -12,6 +12,8 @@ use log::*;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
+static GRID_ATLAS_PAD_NUM: i32 = 2;
+static GRID_ATLAS_PAD_DEN: i32 = 1;
 
 #[derive(Debug)]
 pub enum AtlasError {
@@ -24,6 +26,8 @@ pub struct GridAtlas {
     pub tex: GLuint,
     cell_width: i32,
     cell_height: i32,
+    cell_offset_x: i32,
+    cell_offset_y: i32,
     grid_width: i32,
     grid_height: i32,
     free_line: i32,
@@ -31,19 +35,23 @@ pub struct GridAtlas {
 }
 
 impl GridAtlas {
-    pub fn new(props: &term::SizeInfo) -> Self {
+    pub fn new(size_info: &term::SizeInfo) -> Self {
         // FIXME limit atlas size by 256x256 cells
-        let cell_width = props.cell_width as i32;
-        let cell_height = props.cell_height as i32;
-        Self {
+        let cell_width = (size_info.cell_width as i32) * GRID_ATLAS_PAD_NUM / GRID_ATLAS_PAD_DEN;
+        let cell_height = (size_info.cell_height as i32) * GRID_ATLAS_PAD_NUM / GRID_ATLAS_PAD_DEN;
+        let ret = Self {
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
             grid_width: GRID_ATLAS_SIZE / cell_width,
             grid_height: GRID_ATLAS_SIZE / cell_height,
+            cell_offset_x: (cell_width - (size_info.cell_width as i32)) / 2,
+            cell_offset_y: (cell_height - (size_info.cell_height as i32)) / 2,
             cell_width,
             cell_height,
             free_line: 0,
             free_column: 1,
-        }
+        };
+        debug!("atlas: {:?}", ret);
+        ret
     }
 
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
@@ -90,11 +98,15 @@ impl GridAtlas {
             // TODO optimize
             // 1. only copy into internal storage
             // 2. upload once before drawing by column/line subrect
+            let off_x = self.cell_offset_x + rasterized.left;
+            let tex_x = off_x + column * self.cell_width;
+            let off_y = -self.cell_offset_y + self.cell_height - rasterized.top; //+ rasterized.height; // - rasterized.top;
+            let tex_y = off_y + line * self.cell_height;
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
-                std::cmp::max(0, column * self.cell_width + rasterized.left),
-                std::cmp::max(0, line * self.cell_height + self.cell_height - rasterized.top),
+                std::cmp::max(0, tex_x),
+                std::cmp::max(0, tex_y),
                 rasterized.width,
                 rasterized.height,
                 format,
@@ -103,18 +115,22 @@ impl GridAtlas {
             );
 
             gl::BindTexture(gl::TEXTURE_2D, 0);
-        }
 
-        // eprintln!(
-        //     "{} {},{} {}x{} => l={} c={}",
-        //     rasterized.c,
-        //     rasterized.left,
-        //     rasterized.top,
-        //     rasterized.width,
-        //     rasterized.height,
-        //     line,
-        //     column
-        // );
+            debug!(
+                "{} {},{} {}x{} {},{} => l={} c={} {},{}",
+                rasterized.c,
+                rasterized.left,
+                rasterized.top,
+                rasterized.width,
+                rasterized.height,
+                off_x,
+                off_y,
+                line,
+                column,
+                tex_x,
+                tex_y,
+            );
+        }
 
         self.free_column += if wide { 2 } else { 1 };
         if self.free_column == self.grid_width {
