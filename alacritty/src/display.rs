@@ -37,7 +37,7 @@ use crate::event::{Mouse, SearchState};
 use crate::message_bar::MessageBuffer;
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, simple::SimpleRenderer, GlyphCache};
+use crate::renderer::{self, simple::SimpleRenderer, simple::RenderContext, GlyphCache};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -475,6 +475,8 @@ impl Display {
 
 				self.renderer.clear(background_color, config.ui_config.background_opacity());
 
+				let mut render_context = self.renderer.begin(&config.ui_config, config.cursor, &size_info);
+
         let mut lines = RenderLines::new();
         let mut urls = Urls::new();
 
@@ -485,30 +487,81 @@ impl Display {
             #[cfg(feature = "dump-raw-render-timings")]
             let start = Instant::now();
 
-            self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-                // Iterate over all non-empty cells in the grid.
-                for cell in grid_cells {
-                    // Update URL underlines.
-                    urls.update(size_info.cols(), cell);
+							// Iterate over all non-empty cells in the grid.
+							for cell in grid_cells {
+									// Update URL underlines.
+									urls.update(size_info.cols(), cell);
 
-                    // Update underline/strikeout.
-                    lines.update(cell);
+									// Update underline/strikeout.
+									lines.update(cell);
 
-                    // Draw the cell.
-                    api.render_cell(cell, glyph_cache);
-                }
-            });
+									// Draw the cell.
+									render_context.update_cell(cell, glyph_cache);
+							}
 
             #[cfg(feature = "dump-raw-render-timings")]
             {
-								self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-                    api.finish();
-                });
+								self.renderer.finish();
 
                 let dt = (Instant::now() - start).as_micros() as u32;
                 std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
             }
         }
+
+        let mut message_bar_lines = 0;
+        if let Some(message) = message_buffer.message() {
+            let text = message.text(&size_info);
+            message_bar_lines = text.len();
+
+            // // Create a new rectangle for the background.
+            // let start_line = size_info.lines().0 - message_bar_lines;
+            // let y = size_info.cell_height.mul_add(start_line as f32, size_info.padding_y);
+            // let message_bar_rect =
+            //     RenderRect::new(0., y, size_info.width, size_info.height - y, message.color(), 1.);
+            //
+            // // Push message_bar in the end, so it'll be above all other content.
+            // rects.push(message_bar_rect);
+            //
+            // // Draw rectangles.  render_context.draw_rects(&size_info, rects);
+
+            // Relay messages to the user.
+            let fg = config.colors.primary.background;
+            for (i, message_text) in text.iter().rev().enumerate() {
+                    render_context.render_string(
+                        glyph_cache,
+                        Line(size_info.lines().saturating_sub(i + 1)),
+                        &message_text,
+                        fg,
+                        Some(message.color()),
+                    );
+            }
+        }
+
+        Self::draw_render_timer(&mut self.glyph_cache, &mut render_context, config, &size_info, &self.meter);
+
+        // Handle search and IME positioning.
+        let ime_position = match search_state.regex() {
+            Some(regex) => {
+                let search_label = match search_state.direction() {
+                    Direction::Right => FORWARD_SEARCH_LABEL,
+                    Direction::Left => BACKWARD_SEARCH_LABEL,
+                };
+
+                let search_text = Self::format_search(&size_info, regex, search_label);
+
+                // Render the search bar.
+                Self::draw_search(&mut self.glyph_cache, &mut render_context, config, &size_info, message_bar_lines, &search_text);
+
+                // Compute IME position.
+                Point::new(size_info.lines() - 1, Column(search_text.len() - 1))
+            },
+            None => cursor_point,
+        };
+
+        // Update IME position.
+        self.window.update_ime_position(ime_position, &self.size_info);
+
+				render_context.draw_grid_text();
 
         let mut rects = lines.rects(&metrics, &size_info);
 
@@ -550,64 +603,10 @@ impl Display {
             rects.push(visual_bell_rect);
         }
 
-        let mut message_bar_lines = 0;
-        if let Some(message) = message_buffer.message() {
-            let text = message.text(&size_info);
-            message_bar_lines = text.len();
+				// Draw rectangles.
+				render_context.draw_rects(&size_info, rects);
 
-            // Create a new rectangle for the background.
-            let start_line = size_info.lines().0 - message_bar_lines;
-            let y = size_info.cell_height.mul_add(start_line as f32, size_info.padding_y);
-            let message_bar_rect =
-                RenderRect::new(0., y, size_info.width, size_info.height - y, message.color(), 1.);
-
-            // Push message_bar in the end, so it'll be above all other content.
-            rects.push(message_bar_rect);
-
-            // Draw rectangles.
-            self.renderer.draw_rects(&size_info, rects);
-
-            // Relay messages to the user.
-            let fg = config.colors.primary.background;
-            for (i, message_text) in text.iter().rev().enumerate() {
-                self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-                    api.render_string(
-                        glyph_cache,
-                        Line(size_info.lines().saturating_sub(i + 1)),
-                        &message_text,
-                        fg,
-                        Some(message.color()),
-                    );
-                });
-            }
-        } else {
-            // Draw rectangles.
-            self.renderer.draw_rects(&size_info, rects);
-        }
-
-        self.draw_render_timer(config, &size_info);
-
-        // Handle search and IME positioning.
-        let ime_position = match search_state.regex() {
-            Some(regex) => {
-                let search_label = match search_state.direction() {
-                    Direction::Right => FORWARD_SEARCH_LABEL,
-                    Direction::Left => BACKWARD_SEARCH_LABEL,
-                };
-
-                let search_text = Self::format_search(&size_info, regex, search_label);
-
-                // Render the search bar.
-                self.draw_search(config, &size_info, message_bar_lines, &search_text);
-
-                // Compute IME position.
-                Point::new(size_info.lines() - 1, Column(search_text.len() - 1))
-            },
-            None => cursor_point,
-        };
-
-        // Update IME position.
-        self.window.update_ime_position(ime_position, &self.size_info);
+				drop(render_context);
 
         // Frame event should be requested before swaping buffers, since it requires surface
         // `commit`, which is done by swap buffers under the hood.
@@ -657,13 +656,13 @@ impl Display {
 
     /// Draw current search regex.
     fn draw_search(
-        &mut self,
+				glyph_cache: &mut GlyphCache,
+				render_context: &mut RenderContext,
         config: &Config,
         size_info: &SizeInfo,
         message_bar_lines: usize,
         text: &str,
     ) {
-        let glyph_cache = &mut self.glyph_cache;
         let num_cols = size_info.cols().0;
 
         // Assure text length is at least num_cols.
@@ -672,25 +671,19 @@ impl Display {
         let fg = config.colors.search_bar_foreground();
         let bg = config.colors.search_bar_background();
         let line = size_info.lines() - message_bar_lines - 1;
-        self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-            api.render_string(glyph_cache, line, &text, fg, Some(bg));
-        });
+        render_context.render_string(glyph_cache, line, &text, fg, Some(bg));
     }
 
     /// Draw render timer.
-    fn draw_render_timer(&mut self, config: &Config, size_info: &SizeInfo) {
+    fn draw_render_timer(glyph_cache: &mut GlyphCache, render_context: &mut RenderContext, config: &Config, size_info: &SizeInfo, meter:&Meter) {
         if !config.ui_config.debug.render_timer {
             return;
         }
-        let glyph_cache = &mut self.glyph_cache;
-
-        let timing = format!("{:.3} usec", self.meter.average());
+        let timing = format!("{:.3} usec", meter.average());
         let fg = config.colors.normal().black;
         let bg = config.colors.normal().red;
 
-        self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-            api.render_string(glyph_cache, size_info.lines() - 2, &timing[..], fg, Some(bg));
-        });
+        render_context.render_string(glyph_cache, size_info.lines() - 2, &timing[..], fg, Some(bg));
     }
 
     /// Requst a new frame for a window on Wayland.

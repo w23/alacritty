@@ -76,8 +76,7 @@ impl SimpleRenderer {
         let mut rect_ebo: GLuint = 0;
 
         unsafe {
-            // gl::Enable(gl::BLEND);
-            // gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             gl::DepthMask(gl::FALSE);
 
@@ -154,60 +153,6 @@ impl SimpleRenderer {
         self.cursor_color = color;
     }
 
-    /// Draw all rectangles simultaneously to prevent excessive program swaps.
-    pub fn draw_rects(&mut self, props: &term::SizeInfo, rects: Vec<RenderRect>) {
-        // Swap to rectangle rendering program.
-        unsafe {
-            // Swap program.
-            gl::UseProgram(self.rect_program.id);
-
-            // Remove padding from viewport.
-            gl::Viewport(0, 0, props.width as i32, props.height as i32);
-
-            // Change blending strategy.
-            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
-            // Setup data and buffers.
-            gl::BindVertexArray(self.rect_vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.rect_vbo);
-
-            // Position.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<f32>() * 2) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-        }
-
-        // Draw all the rects.
-        for rect in rects {
-            self.render_rect(&rect, props);
-        }
-
-        // Deactivate rectangle program again.
-        unsafe {
-            // Reset blending strategy.
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            let padding_x = props.padding_x as i32;
-            let padding_y = props.padding_y as i32;
-            let width = props.width as i32;
-            let height = props.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
-        }
-    }
-
     /// Render a rectangle.
     ///
     /// This requires the rectangle program to be activated.
@@ -245,17 +190,13 @@ impl SimpleRenderer {
         }
     }
 
-    pub fn with_api<F, T>(
-        &mut self,
-        config: &UIConfig,
+    pub fn begin<'a>(
+        &'a mut self,
+        config: &'a UIConfig,
         cursor_config: Cursor,
-        props: &SizeInfo,
-        func: F,
-    ) -> T
-    where
-        F: FnOnce(RenderApi<'_>) -> T,
-    {
-        func(RenderApi { seen_cells: false, this: self, props, config, cursor_config })
+        size_info: &'a SizeInfo,
+    ) -> RenderContext<'a> {
+        RenderContext { this: self, size_info, config, cursor_config }
     }
 
     pub fn with_loader<F, T>(&mut self, func: F) -> T
@@ -289,7 +230,7 @@ impl SimpleRenderer {
         self.screen_glyphs_ref.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
     }
 
-    fn render(&mut self, props: &SizeInfo) {
+    fn paint(&mut self, size_info: &SizeInfo) {
         #[cfg(feature = "live-shader-reload")]
         {
             match self.program.poll() {
@@ -306,7 +247,7 @@ impl SimpleRenderer {
         unsafe {
             gl::UseProgram(self.program.program.id);
 
-            self.program.set_term_uniforms(props);
+            self.program.set_term_uniforms(size_info);
             gl::Uniform1i(self.program.u_atlas, 0);
             gl::Uniform1i(self.program.u_glyph_ref, 1);
             gl::Uniform1i(self.program.u_color_fg, 2);
@@ -366,6 +307,32 @@ impl SimpleRenderer {
         }
     }
 
+    pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
+        self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
+        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
+        self.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
+
+        unsafe {
+            let alpha = background_opacity;
+            gl::ClearColor(
+                (f32::from(color.r) / 255.0).min(1.0) * alpha,
+                (f32::from(color.g) / 255.0).min(1.0) * alpha,
+                (f32::from(color.b) / 255.0).min(1.0) * alpha,
+                alpha,
+            );
+            gl::Clear(gl::COLOR_BUFFER_BIT);
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub fn finish(&self) {
+        unsafe {
+            gl::Finish();
+        }
+    }
+}
+
+impl LoadGlyph for SimpleRenderer {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
         if self.atlas.is_some() {
             match self.atlas.as_mut().unwrap().load_glyph(rasterized) {
@@ -392,45 +359,20 @@ impl SimpleRenderer {
         }
     }
 
-    fn clear_atlas(&mut self) {
+    fn clear(&mut self) {
         self.atlas = None;
-    }
-
-    pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
-        self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
-        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
-        self.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
-
-        unsafe {
-            let alpha = background_opacity;
-            gl::ClearColor(
-                (f32::from(color.r) / 255.0).min(1.0) * alpha,
-                (f32::from(color.g) / 255.0).min(1.0) * alpha,
-                (f32::from(color.b) / 255.0).min(1.0) * alpha,
-                alpha,
-            );
-            gl::Clear(gl::COLOR_BUFFER_BIT);
-        }
-    }
-
-    #[cfg(not(any(target_os = "macos", windows)))]
-    pub fn finish(&self) {
-        unsafe {
-            gl::Finish();
-        }
     }
 }
 
 #[derive(Debug)]
-pub struct RenderApi<'a> {
-    seen_cells: bool,
+pub struct RenderContext<'a> {
     this: &'a mut SimpleRenderer,
-    props: &'a term::SizeInfo,
+    size_info: &'a term::SizeInfo,
     config: &'a UIConfig,
     cursor_config: Cursor,
 }
 
-impl<'a> RenderApi<'a> {
+impl<'a> RenderContext<'a> {
     /// Render a string in a variable location. Used for printing the render timer, warnings and
     /// errors.
     pub fn render_string(
@@ -464,15 +406,13 @@ impl<'a> RenderApi<'a> {
             .collect::<Vec<_>>();
 
         for cell in cells {
-            self.render_cell(cell, glyph_cache);
+            self.update_cell(cell, glyph_cache);
         }
     }
 
-    pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
-        self.seen_cells = true;
-
+    pub fn update_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
         if self.this.atlas.is_none() {
-            self.this.atlas = Some(GridAtlas::new(self.props));
+            self.this.atlas = Some(GridAtlas::new(self.size_info));
         }
 
         match cell.inner {
@@ -564,27 +504,79 @@ impl<'a> RenderApi<'a> {
                 }
 
                 // FIXME Render zero-width characters.
-                // FIXME Ligatures? How do they work?
             }
         };
     }
+
+    /// Draw all rectangles simultaneously to prevent excessive program swaps.
+    pub fn draw_rects(&mut self, size_info: &term::SizeInfo, rects: Vec<RenderRect>) {
+        // Swap to rectangle rendering program.
+        unsafe {
+            // Swap program.
+            gl::UseProgram(self.this.rect_program.id);
+
+            // Remove padding from viewport.
+            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
+
+            // Change blending strategy.
+            gl::Enable(gl::BLEND);
+            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+
+            // Setup data and buffers.
+            gl::BindVertexArray(self.this.rect_vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.this.rect_vbo);
+
+            // Position.
+            gl::VertexAttribPointer(
+                0,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                (size_of::<f32>() * 2) as _,
+                ptr::null(),
+            );
+            gl::EnableVertexAttribArray(0);
+        }
+
+        // Draw all the rects.
+        for rect in rects {
+            // FIXME do in a single draw call
+            self.this.render_rect(&rect, size_info);
+        }
+
+        // Deactivate rectangle program again.
+        unsafe {
+            // Reset blending strategy.
+            gl::Disable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
+
+            // Reset data and buffers.
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            let padding_x = size_info.padding_x as i32;
+            let padding_y = size_info.padding_y as i32;
+            let width = size_info.width as i32;
+            let height = size_info.height as i32;
+            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
+
+            // Disable program.
+            gl::UseProgram(0);
+        }
+    }
+
+    pub fn draw_grid_text(&mut self) {
+        self.this.paint(self.size_info);
+    }
 }
 
-impl<'a> LoadGlyph for RenderApi<'a> {
+impl<'a> LoadGlyph for RenderContext<'a> {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
         self.this.load_glyph(rasterized)
     }
 
     fn clear(&mut self) {
-        self.this.clear_atlas();
-    }
-}
-
-impl<'a> Drop for RenderApi<'a> {
-    fn drop(&mut self) {
-        if self.seen_cells {
-            self.this.render(self.props);
-        }
+        LoadGlyph::clear(self.this);
     }
 }
 
@@ -599,6 +591,6 @@ impl<'a> LoadGlyph for LoaderApi<'a> {
     }
 
     fn clear(&mut self) {
-        self.renderer.clear_atlas();
+        LoadGlyph::clear(self.renderer);
     }
 }
