@@ -37,7 +37,7 @@ use crate::event::{Mouse, SearchState};
 use crate::message_bar::MessageBuffer;
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, simple::SimpleRenderer, GlyphCache, QuadRenderer};
+use crate::renderer::{self, simple::SimpleRenderer, GlyphCache};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -155,7 +155,6 @@ pub struct Display {
     #[cfg(not(any(target_os = "macos", windows)))]
     pub wayland_event_queue: Option<EventQueue>,
 
-    //FIXME renderer: QuadRenderer,
     renderer: SimpleRenderer,
     glyph_cache: GlyphCache,
     meter: Meter,
@@ -216,7 +215,6 @@ impl Display {
         let viewport_size = window.inner_size();
 
         // Create renderer.
-        //FIXME let mut renderer = QuadRenderer::new()?;
         let mut renderer = SimpleRenderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
