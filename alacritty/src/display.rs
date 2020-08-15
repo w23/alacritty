@@ -261,9 +261,7 @@ impl Display {
 
         // Clear screen.
         let background_color = config.colors.primary.background;
-        renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-            api.clear(background_color);
-        });
+				renderer.clear(background_color, config.ui_config.background_opacity());
 
         // Set subpixel anti-aliasing.
         #[cfg(target_os = "macos")]
@@ -277,9 +275,7 @@ impl Display {
         #[cfg(not(any(target_os = "macos", windows)))]
         if is_x11 {
             window.swap_buffers();
-            renderer.with_api(&config.ui_config, config.cursor, &size_info, |api| {
-                api.finish();
-            });
+						renderer.finish();
         }
 
         window.set_visible(true);
@@ -477,9 +473,7 @@ impl Display {
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
-        self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |mut api| {
-            api.clear(background_color);
-        });
+				self.renderer.clear(background_color, config.ui_config.background_opacity());
 
         let mut lines = RenderLines::new();
         let mut urls = Urls::new();
@@ -627,9 +621,7 @@ impl Display {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
             // will block to synchronize (this is `glClear` in Alacritty), which causes a
             // permanent one frame delay.
-            self.renderer.with_api(&config.ui_config, config.cursor, &size_info, |api| {
-                api.finish();
-            });
+            self.renderer.finish();
         }
     }
 

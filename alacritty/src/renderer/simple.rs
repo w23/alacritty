@@ -395,29 +395,14 @@ impl SimpleRenderer {
     fn clear_atlas(&mut self) {
         self.atlas = None;
     }
-}
 
-#[derive(Debug)]
-pub struct RenderApi<'a> {
-    seen_cells: bool,
-    this: &'a mut SimpleRenderer,
-    props: &'a term::SizeInfo,
-    config: &'a UIConfig,
-    cursor_config: Cursor,
-}
-
-impl<'a> RenderApi<'a> {
-    pub fn clear(&mut self, color: Rgb) {
-        self.this
-            .screen_glyphs_ref
-            .iter_mut()
-            .map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 })
-            .count();
-        self.this.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
-        self.this.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
+    pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
+        self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
+        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
+        self.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
 
         unsafe {
-            let alpha = self.config.background_opacity();
+            let alpha = background_opacity;
             gl::ClearColor(
                 (f32::from(color.r) / 255.0).min(1.0) * alpha,
                 (f32::from(color.g) / 255.0).min(1.0) * alpha,
@@ -434,7 +419,18 @@ impl<'a> RenderApi<'a> {
             gl::Finish();
         }
     }
+}
 
+#[derive(Debug)]
+pub struct RenderApi<'a> {
+    seen_cells: bool,
+    this: &'a mut SimpleRenderer,
+    props: &'a term::SizeInfo,
+    config: &'a UIConfig,
+    cursor_config: Cursor,
+}
+
+impl<'a> RenderApi<'a> {
     /// Render a string in a variable location. Used for printing the render timer, warnings and
     /// errors.
     pub fn render_string(
