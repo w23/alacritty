@@ -26,7 +26,6 @@ vec3 drawGlyph(vec4 glyph, vec2 cell_pix, vec3 bg, vec3 fg) {
 void main() {
 	vec2 uv = gl_FragCoord.xy;
 	uv.y = screen_dim.w - uv.y;
-
 	uv.xy -= screen_dim.xy;
 
 	vec2 cell = floor(uv / cell_dim);
@@ -39,8 +38,6 @@ void main() {
 		return;
 	}
 
-	vec2 cell_pix = mod(uv, cell_dim);
-
 	vec2 tuv = (cell + .5) / screen_cells;
 	vec4 glyph = texture(glyph_ref, tuv);
 	vec3 fg = texture(color_fg, tuv).rgb;
@@ -48,6 +45,7 @@ void main() {
 
 	color = vec4(bg, 1.);
 
+	vec2 cell_pix = mod(uv, cell_dim);
 	if (cell == cursor.xy)
 		color = vec4(drawGlyph(vec4(cursor.zw, 0., 0.), cell_pix, color.rgb, cursor_color), 1.);
 

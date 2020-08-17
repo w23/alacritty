@@ -71,9 +71,11 @@ impl GridAtlas {
     }
 
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
-        if rasterized.width > self.cell_width || rasterized.height > self.cell_height {
-            debug!(
-                "{} {},{} {}x{}",
+        if rasterized.width + self.cell_offset_x > self.cell_width
+            || rasterized.height + self.cell_offset_y > self.cell_height
+        {
+            error!(
+                "FIXME: glyph '{}' {},{} {}x{} doesn't fit into atlas cell",
                 rasterized.c, rasterized.left, rasterized.top, rasterized.width, rasterized.height,
             );
 
