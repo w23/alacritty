@@ -41,7 +41,7 @@ void main() {
 
 	vec2 cell_pix = mod(uv, cell_dim);
 
-	vec2 tuv = (cell + .5) / vec2(textureSize(glyph_ref, 0));
+	vec2 tuv = (cell + .5) / screen_cells;
 	vec4 glyph = texture(glyph_ref, tuv);
 	vec3 fg = texture(color_fg, tuv).rgb;
 	vec3 bg = texture(color_bg, tuv).rgb;
@@ -52,6 +52,36 @@ void main() {
 		color = vec4(drawGlyph(vec4(cursor.zw, 0., 0.), cell_pix, color.rgb, cursor_color), 1.);
 
 	color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix, color.rgb, fg.rgb), 1.);
+
+	if (cell_pix.y > (cell_dim.y - atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
+		vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells;
+		vec4 glyph = texture(glyph_ref, tuv);
+		vec3 fg = texture(color_fg, tuv).rgb;
+		vec3 bg = texture(color_bg, tuv).rgb;
+		color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -cell_dim.y), color.rgb, fg.rgb), 1.);
+		//color.g = 1.;
+	}
+
+	if (cell_pix.x < atlas_dim.x && cell.x > 0.) {
+		vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells;
+		vec4 glyph = texture(glyph_ref, tuv);
+		vec3 fg = texture(color_fg, tuv).rgb;
+		vec3 bg = texture(color_bg, tuv).rgb;
+		color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(cell_dim.x, 0.), color.rgb, fg.rgb), 1.);
+		//color.b = 1.;
+	}
+
+	// TODO:
+	// -, +
+	// +. +
+	// -, 0
+	// +, 0
+	// -, -
+	// 0, -
+	// +, -
+
+	// TODO: glyph-level (outside shader) masking for these cases so that we only check some bits
+	// instead of brute-forcing all cases
 
 	//color = vec4(fg.rgb, 1.);
 	//color = vec4(bg.rgb, 1.);

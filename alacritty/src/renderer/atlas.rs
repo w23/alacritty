@@ -12,7 +12,7 @@ use log::*;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
-static GRID_ATLAS_PAD_PCT_X: i32 = 25;
+static GRID_ATLAS_PAD_PCT_X: i32 = 50;
 static GRID_ATLAS_PAD_PCT_Y: i32 = 25;
 
 #[derive(Debug)]
