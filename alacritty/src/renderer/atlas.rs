@@ -12,13 +12,20 @@ use log::*;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
-static GRID_ATLAS_PAD_NUM: i32 = 2;
-static GRID_ATLAS_PAD_DEN: i32 = 1;
+static GRID_ATLAS_PAD_PCT_X: i32 = 25;
+static GRID_ATLAS_PAD_PCT_Y: i32 = 25;
 
 #[derive(Debug)]
 pub enum AtlasError {
     TooBig { w: i32, h: i32, cw: i32, ch: i32 },
     Full,
+}
+
+pub struct CellDims {
+    pub off_x: i32,
+    pub off_y: i32,
+    pub size_x: i32,
+    pub size_y: i32,
 }
 
 #[derive(Debug)]
@@ -37,8 +44,8 @@ pub struct GridAtlas {
 impl GridAtlas {
     pub fn new(size_info: &term::SizeInfo) -> Self {
         // FIXME limit atlas size by 256x256 cells
-        let cell_width = (size_info.cell_width as i32) * GRID_ATLAS_PAD_NUM / GRID_ATLAS_PAD_DEN;
-        let cell_height = (size_info.cell_height as i32) * GRID_ATLAS_PAD_NUM / GRID_ATLAS_PAD_DEN;
+        let cell_width = (size_info.cell_width as i32) * (100 + GRID_ATLAS_PAD_PCT_X) / 100;
+        let cell_height = (size_info.cell_height as i32) * (100 + GRID_ATLAS_PAD_PCT_Y) / 100;
         let ret = Self {
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
             grid_width: GRID_ATLAS_SIZE / cell_width,
@@ -50,8 +57,17 @@ impl GridAtlas {
             free_line: 0,
             free_column: 1,
         };
-        debug!("atlas: {:?}", ret);
+        debug!("atlas: {:#?}", ret);
         ret
+    }
+
+    pub fn cell_dims(&self) -> CellDims {
+        CellDims {
+            off_x: self.cell_offset_x,
+            off_y: self.cell_offset_y,
+            size_x: self.cell_width,
+            size_y: self.cell_height,
+        }
     }
 
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {

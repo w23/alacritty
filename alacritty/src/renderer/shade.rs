@@ -333,6 +333,7 @@ pub struct ScreenShaderProgram {
     pub u_cursor_color: GLint,
 
     pub u_atlas: GLint,
+    pub u_atlas_dim: GLint,
 }
 
 // Shader paths for live reload.
@@ -363,6 +364,7 @@ impl ScreenShaderProgram {
             u_cell_dim: -1,
             u_glyph_ref: -1,
             u_atlas: -1,
+            u_atlas_dim: -1,
             u_color_fg: -1,
             u_color_bg: -1,
             u_cursor: -1,
@@ -380,6 +382,7 @@ impl ScreenShaderProgram {
             u_cell_dim: -1,
             u_glyph_ref: -1,
             u_atlas: -1,
+            u_atlas_dim: -1,
             u_color_fg: -1,
             u_color_bg: -1,
             u_cursor: -1,
@@ -407,16 +410,27 @@ impl ScreenShaderProgram {
         }
 
         // get uniform locations
-        let (screen_dim, cell_dim, atlas, color_bg, color_fg, glyph_ref, cursor, cursor_color) = unsafe {
+        let (
+            screen_dim,
+            cell_dim,
+            atlas,
+            color_bg,
+            color_fg,
+            glyph_ref,
+            cursor,
+            cursor_color,
+            atlas_dim,
+        ) = unsafe {
             (
-                gl::GetUniformLocation(self.program.id, cptr!(b"screenDim\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cellDim\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"screen_dim\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"cell_dim\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"color_bg\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"color_fg\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"glyphRef\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"glyph_ref\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cursor\0")),
                 gl::GetUniformLocation(self.program.id, cptr!(b"cursor_color\0")),
+                gl::GetUniformLocation(self.program.id, cptr!(b"atlas_dim\0")),
             )
         };
 
@@ -429,7 +443,8 @@ impl ScreenShaderProgram {
                 color_fg,
                 glyph_ref,
                 cursor,
-                cursor_color
+                cursor_color,
+                atlas_dim
             );
         }
 
@@ -441,6 +456,7 @@ impl ScreenShaderProgram {
         self.u_color_bg = color_bg;
         self.u_cursor = cursor;
         self.u_cursor_color = cursor_color;
+        self.u_atlas_dim = atlas_dim;
     }
 
     #[cfg(feature = "live-shader-reload")]

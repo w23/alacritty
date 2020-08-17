@@ -244,6 +244,8 @@ impl SimpleRenderer {
             }
         }
 
+        let atlas_dims = self.atlas.as_ref().unwrap().cell_dims();
+
         unsafe {
             gl::UseProgram(self.program.program.id);
 
@@ -264,6 +266,14 @@ impl SimpleRenderer {
                 self.cursor_color.r as f32 / 255.,
                 self.cursor_color.g as f32 / 255.,
                 self.cursor_color.b as f32 / 255.,
+            );
+
+            gl::Uniform4f(
+                self.program.u_atlas_dim,
+                atlas_dims.off_x as f32,
+                atlas_dims.off_y as f32,
+                atlas_dims.size_x as f32,
+                atlas_dims.size_y as f32,
             );
 
             gl::BindTexture(gl::TEXTURE_2D, self.atlas.as_ref().unwrap().tex);
