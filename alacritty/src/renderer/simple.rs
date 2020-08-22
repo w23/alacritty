@@ -10,7 +10,7 @@ use {
         index::{Column, Line},
         term::{
             self,
-            cell::{self, Flags, MAX_ZEROWIDTH_CHARS},
+            cell::{self, Flags},
             color::Rgb,
             RenderableCell, RenderableCellContent, SizeInfo,
         },
@@ -270,10 +270,10 @@ impl SimpleRenderer {
 
             gl::Uniform4f(
                 self.program.u_atlas_dim,
-                atlas_dims.off_x as f32,
-                atlas_dims.off_y as f32,
-                atlas_dims.size_x as f32,
-                atlas_dims.size_y as f32,
+                atlas_dims.offset.x as f32,
+                atlas_dims.offset.y as f32,
+                atlas_dims.size.x as f32,
+                atlas_dims.size.y as f32,
             );
 
             gl::BindTexture(gl::TEXTURE_2D, self.atlas.as_ref().unwrap().tex);
@@ -344,33 +344,16 @@ impl SimpleRenderer {
 
 impl LoadGlyph for SimpleRenderer {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
-        if self.atlas.is_some() {
-            match self.atlas.as_mut().unwrap().load_glyph(rasterized) {
-                Err(e) => {
-                    error!("{:?}: {}", e, rasterized.c);
-                }
-                Ok(glyph) => {
-                    return glyph;
-                }
+        match self.atlas.as_mut().unwrap().load_glyph(rasterized) {
+            Err(e) => {
+                panic!("{:?}: {}", e, rasterized.c);
             }
-        }
-
-        Glyph {
-            tex_id: 0,
-            colored: false,
-            top: 0.0,
-            left: 0.0,
-            width: 0.0,
-            height: 0.0,
-            uv_bot: 0.0,
-            uv_left: 0.0,
-            uv_width: 0.0,
-            uv_height: 0.0,
+            Ok(glyph) => glyph,
         }
     }
 
-    fn clear(&mut self) {
-        self.atlas = None;
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        self.atlas = Some(GridAtlas::new(cell_size));
     }
 }
 
@@ -421,10 +404,6 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn update_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
-        if self.this.atlas.is_none() {
-            self.this.atlas = Some(GridAtlas::new(self.size_info));
-        }
-
         match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
@@ -585,8 +564,8 @@ impl<'a> LoadGlyph for RenderContext<'a> {
         self.this.load_glyph(rasterized)
     }
 
-    fn clear(&mut self) {
-        LoadGlyph::clear(self.this);
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        LoadGlyph::clear(self.this, cell_size);
     }
 }
 
@@ -600,7 +579,7 @@ impl<'a> LoadGlyph for LoaderApi<'a> {
         self.renderer.load_glyph(rasterized)
     }
 
-    fn clear(&mut self) {
-        LoadGlyph::clear(self.renderer);
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        LoadGlyph::clear(self.renderer, cell_size);
     }
 }

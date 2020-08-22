@@ -1,6 +1,8 @@
+use super::atlas::Vec2;
 use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::Delta;
 use crate::config::window::{StartupMode, WindowConfig};
+use crate::config::Config;
 use crate::gl::types::*;
 use alacritty_terminal::term::CursorKey;
 use crossfont::{
@@ -19,7 +21,7 @@ pub trait LoadGlyph {
     /// Clear any state accumulated from previous loaded glyphs.
     ///
     /// This can, for instance, be used to reset the texture Atlas.
-    fn clear(&mut self);
+    fn clear(&mut self, cell_size: Vec2<i32>);
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -70,11 +72,15 @@ pub struct GlyphCache {
 
     /// Font metrics.
     pub metrics: crossfont::Metrics,
+
+    /// Cell size
+    pub cell_size: Vec2<i32>,
 }
 
 impl GlyphCache {
     pub fn new<L>(
         mut rasterizer: Rasterizer,
+        config: &Config,
         font: &Font,
         loader: &mut L,
     ) -> Result<GlyphCache, crossfont::Error>
@@ -90,6 +96,9 @@ impl GlyphCache {
 
         let metrics = rasterizer.metrics(regular, font.size)?;
 
+        let (cell_width, cell_height) = Self::compute_cell_size(config, &metrics);
+        let cell_size = Vec2::new(cell_width as i32, cell_height as i32);
+
         let mut cache = Self {
             cache: HashMap::default(),
             cursor_cache: HashMap::default(),
@@ -101,8 +110,10 @@ impl GlyphCache {
             bold_italic_key: bold_italic,
             glyph_offset: font.glyph_offset,
             metrics,
+            cell_size,
         };
 
+        loader.clear(cell_size);
         cache.load_common_glyphs(loader);
 
         Ok(cache)
@@ -200,8 +211,11 @@ impl GlyphCache {
     }
 
     /// Clear currently cached data in both GL and the registry.
-    pub fn clear_glyph_cache<L: LoadGlyph>(&mut self, loader: &mut L) {
-        loader.clear();
+    pub fn clear_glyph_cache<L: LoadGlyph>(&mut self, config: &Config, loader: &mut L) {
+        let (cell_width, cell_height) = Self::compute_cell_size(config, &self.metrics);
+        self.cell_size = Vec2::new(cell_width as i32, cell_height as i32);
+
+        loader.clear(self.cell_size);
         self.cache = HashMap::default();
         self.cursor_cache = HashMap::default();
 
@@ -210,6 +224,7 @@ impl GlyphCache {
 
     pub fn update_font_size<L: LoadGlyph>(
         &mut self,
+        config: &Config,
         font: &Font,
         dpr: f64,
         loader: &mut L,
@@ -233,7 +248,7 @@ impl GlyphCache {
         self.bold_italic_key = bold_italic;
         self.metrics = metrics;
 
-        self.clear_glyph_cache(loader);
+        self.clear_glyph_cache(config, loader);
 
         Ok(())
     }
@@ -244,11 +259,10 @@ impl GlyphCache {
 
     /// Prefetch glyphs that are almost guaranteed to be loaded anyways.
     fn load_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L) {
-        // FIXME: simple render doesn't know about cell size at this point, so we can't preload glyphs now
-        // self.load_glyphs_for_font(self.font_key, loader);
-        // self.load_glyphs_for_font(self.bold_italic_key, loader);
-        // self.load_glyphs_for_font(self.italic_key, loader);
-        // self.load_glyphs_for_font(self.bold_italic_key, loader);
+        self.load_glyphs_for_font(self.font_key, loader);
+        self.load_glyphs_for_font(self.bold_italic_key, loader);
+        self.load_glyphs_for_font(self.italic_key, loader);
+        self.load_glyphs_for_font(self.bold_italic_key, loader);
     }
 
     /// Calculate font metrics without access to a glyph cache.
@@ -287,5 +301,16 @@ impl GlyphCache {
         let height = padding_y.mul_add(2., f64::from(grid_height)).floor();
 
         Some((width as u32, height as u32))
+    }
+
+    /// Calculate the cell dimensions based on font metrics.
+    #[inline]
+    pub fn compute_cell_size(config: &Config, metrics: &crossfont::Metrics) -> (f32, f32) {
+        let offset_x = f64::from(config.ui_config.font.offset.x);
+        let offset_y = f64::from(config.ui_config.font.offset.y);
+        (
+            ((metrics.average_advance + offset_x) as f32).floor().max(1.),
+            ((metrics.line_height + offset_y) as f32).floor().max(1.),
+        )
     }
 }

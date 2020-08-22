@@ -1,4 +1,3 @@
-use super::filewatch;
 use crate::gl;
 use crate::gl::types::*;
 use alacritty_terminal::term;
@@ -10,6 +9,9 @@ use std::fmt::Formatter;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+
+#[cfg(feature = "live-shader-reload")]
+use super::filewatch;
 
 #[derive(Debug)]
 pub enum ShaderCreationError {

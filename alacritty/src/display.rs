@@ -173,7 +173,7 @@ impl Display {
 
         // Guess the target window dimensions.
         let metrics = GlyphCache::static_metrics(config.ui_config.font.clone(), estimated_dpr)?;
-        let (cell_width, cell_height) = compute_cell_size(config, &metrics);
+        let (cell_width, cell_height) = GlyphCache::compute_cell_size(config, &metrics);
 
         let dimensions = GlyphCache::calculate_dimensions(
             &config.ui_config.window,
@@ -317,7 +317,6 @@ impl Display {
 
     fn new_glyph_cache(
         dpr: f64,
-        //renderer: &mut QuadRenderer,
         renderer: &mut SimpleRenderer,
         config: &Config,
     ) -> Result<(GlyphCache, f32, f32), Error> {
@@ -330,7 +329,7 @@ impl Display {
             let init_start = Instant::now();
 
             let cache =
-                renderer.with_loader(|mut api| GlyphCache::new(rasterizer, &font, &mut api))?;
+                renderer.with_loader(|mut api| GlyphCache::new(rasterizer, config, &font, &mut api))?;
 
             let stop = init_start.elapsed();
             let stop_f = stop.as_secs() as f64 + f64::from(stop.subsec_nanos()) / 1_000_000_000f64;
@@ -342,7 +341,8 @@ impl Display {
         // Need font metrics to resize the window properly. This suggests to me the
         // font metrics should be computed before creating the window in the first
         // place so that a resize is not needed.
-        let (cw, ch) = compute_cell_size(config, &glyph_cache.font_metrics());
+        // FIXME get from glyph_cache
+				let (cw, ch) = GlyphCache::compute_cell_size(config, &glyph_cache.font_metrics());
 
         Ok((glyph_cache, cw, ch))
     }
@@ -353,20 +353,20 @@ impl Display {
         let cache = &mut self.glyph_cache;
 
         self.renderer.with_loader(|mut api| {
-            let _ = cache.update_font_size(font, size_info.dpr, &mut api);
+            let _ = cache.update_font_size(config, font, size_info.dpr, &mut api);
         });
 
         // Update cell size.
-        let (cell_width, cell_height) = compute_cell_size(config, &self.glyph_cache.font_metrics());
+        let (cell_width, cell_height) = GlyphCache::compute_cell_size(config, &self.glyph_cache.font_metrics());
         size_info.cell_width = cell_width;
         size_info.cell_height = cell_height;
     }
 
     /// Clear glyph cache.
-    fn clear_glyph_cache(&mut self) {
+    fn clear_glyph_cache(&mut self, config: &Config) {
         let cache = &mut self.glyph_cache;
         self.renderer.with_loader(|mut api| {
-            cache.clear_glyph_cache(&mut api);
+            cache.clear_glyph_cache(config, &mut api);
         });
     }
 
@@ -386,7 +386,7 @@ impl Display {
         if let Some(font) = update_pending.font() {
             self.update_glyph_cache(config, font);
         } else if update_pending.cursor_dirty() {
-            self.clear_glyph_cache();
+            self.clear_glyph_cache(config);
         }
 
         let cell_width = self.size_info.cell_width;
@@ -711,15 +711,4 @@ impl Display {
 #[inline]
 fn dynamic_padding(padding: f32, dimension: f32, cell_dimension: f32) -> f32 {
     padding + ((dimension - 2. * padding) % cell_dimension) / 2.
-}
-
-/// Calculate the cell dimensions based on font metrics.
-#[inline]
-fn compute_cell_size(config: &Config, metrics: &crossfont::Metrics) -> (f32, f32) {
-    let offset_x = f64::from(config.ui_config.font.offset.x);
-    let offset_y = f64::from(config.ui_config.font.offset.y);
-    (
-        ((metrics.average_advance + offset_x) as f32).floor().max(1.),
-        ((metrics.line_height + offset_y) as f32).floor().max(1.),
-    )
 }

@@ -3,20 +3,20 @@ use std::mem::size_of;
 use std::ptr;
 use std::sync::mpsc;
 
-use crossfont::{BitmapBuffer, GlyphKey, Rasterize, RasterizedGlyph};
-use log::{error, info};
+use crossfont::{BitmapBuffer, /* GlyphKey, Rasterize,  */ RasterizedGlyph};
+//use log::{error, info};
 
 use alacritty_terminal::config::Cursor;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::{self, Flags};
-use alacritty_terminal::term::color::Rgb;
-use alacritty_terminal::term::{RenderableCell, RenderableCellContent, SizeInfo};
+// use alacritty_terminal::index::{Column, Line};
+// use alacritty_terminal::term::cell::{self, Flags};
+// use alacritty_terminal::term::color::Rgb;
+use alacritty_terminal::term::RenderableCell;
 
 use crate::config::ui_config::UIConfig;
-use crate::cursor;
+// use crate::cursor;
 use crate::gl;
 use crate::gl::types::*;
-use crate::renderer::rects::RenderRect;
+// use crate::renderer::rects::RenderRect;
 
 pub use glyph::*;
 use shade::*;
@@ -206,535 +206,535 @@ impl Batch {
 const BATCH_MAX: usize = 0x1_0000;
 const ATLAS_SIZE: i32 = 1024;
 
-impl QuadRenderer {
-    pub fn new() -> Result<QuadRenderer, Error> {
-        let program = TextShaderProgram::new()?;
-        let rect_program = RectShaderProgram::new()?;
-
-        let mut vao: GLuint = 0;
-        let mut ebo: GLuint = 0;
-
-        let mut vbo_instance: GLuint = 0;
-
-        let mut rect_vao: GLuint = 0;
-        let mut rect_vbo: GLuint = 0;
-        let mut rect_ebo: GLuint = 0;
-
-        unsafe {
-            gl::Enable(gl::BLEND);
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-            gl::Enable(gl::MULTISAMPLE);
-
-            // Disable depth mask, as the renderer never uses depth tests.
-            gl::DepthMask(gl::FALSE);
-
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut ebo);
-            gl::GenBuffers(1, &mut vbo_instance);
-            gl::BindVertexArray(vao);
-
-            // ---------------------
-            // Set up element buffer
-            // ---------------------
-            let indices: [u32; 6] = [0, 1, 3, 1, 2, 3];
-
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (6 * size_of::<u32>()) as isize,
-                indices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
-
-            // ----------------------------
-            // Setup vertex instance buffer
-            // ----------------------------
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo_instance);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (BATCH_MAX * size_of::<InstanceData>()) as isize,
-                ptr::null(),
-                gl::STREAM_DRAW,
-            );
-            // Coords.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-            gl::VertexAttribDivisor(0, 1);
-            // Glyph offset.
-            gl::VertexAttribPointer(
-                1,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (2 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribDivisor(1, 1);
-            // uv.
-            gl::VertexAttribPointer(
-                2,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (6 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribDivisor(2, 1);
-            // Color.
-            gl::VertexAttribPointer(
-                3,
-                3,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (10 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(3);
-            gl::VertexAttribDivisor(3, 1);
-            // Background color.
-            gl::VertexAttribPointer(
-                4,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (13 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(4);
-            gl::VertexAttribDivisor(4, 1);
-            // Multicolor flag.
-            gl::VertexAttribPointer(
-                5,
-                1,
-                gl::BYTE,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (17 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(5);
-            gl::VertexAttribDivisor(5, 1);
-
-            // Rectangle setup.
-            gl::GenVertexArrays(1, &mut rect_vao);
-            gl::GenBuffers(1, &mut rect_vbo);
-            gl::GenBuffers(1, &mut rect_ebo);
-            gl::BindVertexArray(rect_vao);
-            let indices: [i32; 6] = [0, 1, 3, 1, 2, 3];
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, rect_ebo);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (size_of::<i32>() * indices.len()) as _,
-                indices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
-
-            // Cleanup.
-            gl::BindVertexArray(0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-        }
-
-        let (msg_tx, msg_rx) = mpsc::channel();
-
-        let mut renderer = Self {
-            program,
-            rect_program,
-            vao,
-            ebo,
-            vbo_instance,
-            rect_vao,
-            rect_vbo,
-            atlas: Vec::new(),
-            current_atlas: 0,
-            active_tex: 0,
-            batch: Batch::new(),
-            rx: msg_rx,
-        };
-
-        let atlas = Atlas::new(ATLAS_SIZE);
-        renderer.atlas.push(atlas);
-
-        Ok(renderer)
-    }
-
-    /// Draw all rectangles simultaneously to prevent excessive program swaps.
-    pub fn draw_rects(&mut self, props: &SizeInfo, rects: Vec<RenderRect>) {
-        // Swap to rectangle rendering program.
-        unsafe {
-            // Swap program.
-            gl::UseProgram(self.rect_program.id);
-
-            // Remove padding from viewport.
-            gl::Viewport(0, 0, props.width as i32, props.height as i32);
-
-            // Change blending strategy.
-            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
-            // Setup data and buffers.
-            gl::BindVertexArray(self.rect_vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.rect_vbo);
-
-            // Position.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<f32>() * 2) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-        }
-
-        // Draw all the rects.
-        for rect in rects {
-            self.render_rect(&rect, props);
-        }
-
-        // Deactivate rectangle program again.
-        unsafe {
-            // Reset blending strategy.
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            let padding_x = props.padding_x as i32;
-            let padding_y = props.padding_y as i32;
-            let width = props.width as i32;
-            let height = props.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
-        }
-    }
-
-    pub fn with_api<F, T>(
-        &mut self,
-        config: &UIConfig,
-        cursor_config: Cursor,
-        props: &SizeInfo,
-        func: F,
-    ) -> T
-    where
-        F: FnOnce(RenderApi<'_>) -> T,
-    {
-        unsafe {
-            gl::UseProgram(self.program.id);
-            self.program.set_term_uniforms(props);
-
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
-            gl::ActiveTexture(gl::TEXTURE0);
-        }
-
-        let res = func(RenderApi {
-            active_tex: &mut self.active_tex,
-            batch: &mut self.batch,
-            atlas: &mut self.atlas,
-            current_atlas: &mut self.current_atlas,
-            program: &mut self.program,
-            config,
-            cursor_config,
-        });
-
-        unsafe {
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            gl::UseProgram(0);
-        }
-
-        res
-    }
-
-    pub fn with_loader<F, T>(&mut self, func: F) -> T
-    where
-        F: FnOnce(LoaderApi<'_>) -> T,
-    {
-        unsafe {
-            gl::ActiveTexture(gl::TEXTURE0);
-        }
-
-        func(LoaderApi {
-            active_tex: &mut self.active_tex,
-            atlas: &mut self.atlas,
-            current_atlas: &mut self.current_atlas,
-        })
-    }
-
-    pub fn reload_shaders(&mut self, props: &SizeInfo) {
-        info!("Reloading shaders...");
-        let result = (TextShaderProgram::new(), RectShaderProgram::new());
-        let (program, rect_program) = match result {
-            (Ok(program), Ok(rect_program)) => {
-                unsafe {
-                    gl::UseProgram(program.id);
-                    program.update_projection(
-                        props.width,
-                        props.height,
-                        props.padding_x,
-                        props.padding_y,
-                    );
-                    gl::UseProgram(0);
-                }
-
-                info!("... successfully reloaded shaders");
-                (program, rect_program)
-            }
-            (Err(err), _) | (_, Err(err)) => {
-                error!("{}", err);
-                return;
-            }
-        };
-
-        self.active_tex = 0;
-        self.program = program;
-        self.rect_program = rect_program;
-    }
-
-    pub fn resize(&mut self, size: &SizeInfo) {
-        // Viewport.
-        unsafe {
-            gl::Viewport(
-                size.padding_x as i32,
-                size.padding_y as i32,
-                size.width as i32 - 2 * size.padding_x as i32,
-                size.height as i32 - 2 * size.padding_y as i32,
-            );
-
-            // Update projection.
-            gl::UseProgram(self.program.id);
-            self.program.update_projection(size.width, size.height, size.padding_x, size.padding_y);
-            gl::UseProgram(0);
-        }
-    }
-
-    /// Render a rectangle.
-    ///
-    /// This requires the rectangle program to be activated.
-    fn render_rect(&mut self, rect: &RenderRect, size: &SizeInfo) {
-        // Do nothing when alpha is fully transparent.
-        if rect.alpha == 0. {
-            return;
-        }
-
-        // Calculate rectangle position.
-        let center_x = size.width / 2.;
-        let center_y = size.height / 2.;
-        let x = (rect.x - center_x) / center_x;
-        let y = -(rect.y - center_y) / center_y;
-        let width = rect.width / center_x;
-        let height = rect.height / center_y;
-
-        unsafe {
-            // Setup vertices.
-            let vertices: [f32; 8] = [x + width, y, x + width, y - height, x, y - height, x, y];
-
-            // Load vertex data into array buffer.
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (size_of::<f32>() * vertices.len()) as _,
-                vertices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
-
-            // Color.
-            self.rect_program.set_color(rect.color, rect.alpha);
-
-            // Draw the rectangle.
-            gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
-        }
-    }
-}
-
-impl<'a> RenderApi<'a> {
-    pub fn clear(&self, color: Rgb) {
-        unsafe {
-            let alpha = self.config.background_opacity();
-            gl::ClearColor(
-                (f32::from(color.r) / 255.0).min(1.0) * alpha,
-                (f32::from(color.g) / 255.0).min(1.0) * alpha,
-                (f32::from(color.b) / 255.0).min(1.0) * alpha,
-                alpha,
-            );
-            gl::Clear(gl::COLOR_BUFFER_BIT);
-        }
-    }
-
-    #[cfg(not(any(target_os = "macos", windows)))]
-    pub fn finish(&self) {
-        unsafe {
-            gl::Finish();
-        }
-    }
-
-    fn render_batch(&mut self) {
-        unsafe {
-            gl::BufferSubData(
-                gl::ARRAY_BUFFER,
-                0,
-                self.batch.size() as isize,
-                self.batch.instances.as_ptr() as *const _,
-            );
-        }
-
-        // Bind texture if necessary.
-        if *self.active_tex != self.batch.tex {
-            unsafe {
-                gl::BindTexture(gl::TEXTURE_2D, self.batch.tex);
-            }
-            *self.active_tex = self.batch.tex;
-        }
-
-        unsafe {
-            self.program.set_background_pass(true);
-            gl::DrawElementsInstanced(
-                gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
-            );
-            self.program.set_background_pass(false);
-            gl::DrawElementsInstanced(
-                gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
-            );
-        }
-
-        self.batch.clear();
-    }
-
-    /// Render a string in a variable location. Used for printing the render timer, warnings and
-    /// errors.
-    pub fn render_string(
-        &mut self,
-        glyph_cache: &mut GlyphCache,
-        line: Line,
-        string: &str,
-        fg: Rgb,
-        bg: Option<Rgb>,
-    ) {
-        let bg_alpha = bg.map(|_| 1.0).unwrap_or(0.0);
-
-        let cells = string
-            .chars()
-            .enumerate()
-            .map(|(i, c)| RenderableCell {
-                line,
-                column: Column(i),
-                inner: RenderableCellContent::Chars({
-                    let mut chars = [' '; cell::MAX_ZEROWIDTH_CHARS + 1];
-                    chars[0] = c;
-                    chars
-                }),
-                flags: Flags::empty(),
-                bg_alpha,
-                fg,
-                bg: bg.unwrap_or(Rgb { r: 0, g: 0, b: 0 }),
-            })
-            .collect::<Vec<_>>();
-
-        for cell in cells {
-            self.render_cell(cell, glyph_cache);
-        }
-    }
-
-    #[inline]
-    fn add_render_item(&mut self, cell: RenderableCell, glyph: &Glyph) {
-        // Flush batch if tex changing.
-        if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
-            self.render_batch();
-        }
-
-        self.batch.add_item(cell, glyph);
-
-        // Render batch and clear if it's full.
-        if self.batch.full() {
-            self.render_batch();
-        }
-    }
-
-    pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
-        let chars = match cell.inner {
-            RenderableCellContent::Cursor(cursor_key) => {
-                // Raw cell pixel buffers like cursors don't need to go through font lookup.
-                let metrics = glyph_cache.metrics;
-                let glyph = glyph_cache.cursor_cache.entry(cursor_key).or_insert_with(|| {
-                    self.load_glyph(&cursor::get_cursor_glyph(
-                        cursor_key.style,
-                        metrics,
-                        self.config.font.offset.x,
-                        self.config.font.offset.y,
-                        cursor_key.is_wide,
-                        self.cursor_config.thickness(),
-                    ))
-                });
-                self.add_render_item(cell, glyph);
-                return;
-            }
-            RenderableCellContent::Chars(chars) => chars,
-        };
-
-        // Get font key for cell.
-        let font_key = match cell.flags & Flags::BOLD_ITALIC {
-            Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
-            Flags::ITALIC => glyph_cache.italic_key,
-            Flags::BOLD => glyph_cache.bold_key,
-            _ => glyph_cache.font_key,
-        };
-
-        // Don't render text of HIDDEN cells.
-        let mut chars = if cell.flags.contains(Flags::HIDDEN) {
-            [' '; cell::MAX_ZEROWIDTH_CHARS + 1]
-        } else {
-            chars
-        };
-
-        // Render tabs as spaces in case the font doesn't support it.
-        if chars[0] == '\t' {
-            chars[0] = ' ';
-        }
-
-        let mut glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
-
-        // Add cell to batch.
-        let glyph = glyph_cache.get(glyph_key, self);
-        self.add_render_item(cell, glyph);
-
-        // Render zero-width characters.
-        for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
-            glyph_key.c = *c;
-            let mut glyph = *glyph_cache.get(glyph_key, self);
-
-            // The metrics of zero-width characters are based on rendering
-            // the character after the current cell, with the anchor at the
-            // right side of the preceding character. Since we render the
-            // zero-width characters inside the preceding character, the
-            // anchor has been moved to the right by one cell.
-            glyph.left += glyph_cache.metrics.average_advance as f32;
-
-            self.add_render_item(cell, &glyph);
-        }
-    }
-}
+// impl QuadRenderer {
+//     pub fn new() -> Result<QuadRenderer, Error> {
+//         let program = TextShaderProgram::new()?;
+//         let rect_program = RectShaderProgram::new()?;
+//
+//         let mut vao: GLuint = 0;
+//         let mut ebo: GLuint = 0;
+//
+//         let mut vbo_instance: GLuint = 0;
+//
+//         let mut rect_vao: GLuint = 0;
+//         let mut rect_vbo: GLuint = 0;
+//         let mut rect_ebo: GLuint = 0;
+//
+//         unsafe {
+//             gl::Enable(gl::BLEND);
+//             gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
+//             gl::Enable(gl::MULTISAMPLE);
+//
+//             // Disable depth mask, as the renderer never uses depth tests.
+//             gl::DepthMask(gl::FALSE);
+//
+//             gl::GenVertexArrays(1, &mut vao);
+//             gl::GenBuffers(1, &mut ebo);
+//             gl::GenBuffers(1, &mut vbo_instance);
+//             gl::BindVertexArray(vao);
+//
+//             // ---------------------
+//             // Set up element buffer
+//             // ---------------------
+//             let indices: [u32; 6] = [0, 1, 3, 1, 2, 3];
+//
+//             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+//             gl::BufferData(
+//                 gl::ELEMENT_ARRAY_BUFFER,
+//                 (6 * size_of::<u32>()) as isize,
+//                 indices.as_ptr() as *const _,
+//                 gl::STATIC_DRAW,
+//             );
+//
+//             // ----------------------------
+//             // Setup vertex instance buffer
+//             // ----------------------------
+//             gl::BindBuffer(gl::ARRAY_BUFFER, vbo_instance);
+//             gl::BufferData(
+//                 gl::ARRAY_BUFFER,
+//                 (BATCH_MAX * size_of::<InstanceData>()) as isize,
+//                 ptr::null(),
+//                 gl::STREAM_DRAW,
+//             );
+//             // Coords.
+//             gl::VertexAttribPointer(
+//                 0,
+//                 2,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 ptr::null(),
+//             );
+//             gl::EnableVertexAttribArray(0);
+//             gl::VertexAttribDivisor(0, 1);
+//             // Glyph offset.
+//             gl::VertexAttribPointer(
+//                 1,
+//                 4,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 (2 * size_of::<f32>()) as *const _,
+//             );
+//             gl::EnableVertexAttribArray(1);
+//             gl::VertexAttribDivisor(1, 1);
+//             // uv.
+//             gl::VertexAttribPointer(
+//                 2,
+//                 4,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 (6 * size_of::<f32>()) as *const _,
+//             );
+//             gl::EnableVertexAttribArray(2);
+//             gl::VertexAttribDivisor(2, 1);
+//             // Color.
+//             gl::VertexAttribPointer(
+//                 3,
+//                 3,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 (10 * size_of::<f32>()) as *const _,
+//             );
+//             gl::EnableVertexAttribArray(3);
+//             gl::VertexAttribDivisor(3, 1);
+//             // Background color.
+//             gl::VertexAttribPointer(
+//                 4,
+//                 4,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 (13 * size_of::<f32>()) as *const _,
+//             );
+//             gl::EnableVertexAttribArray(4);
+//             gl::VertexAttribDivisor(4, 1);
+//             // Multicolor flag.
+//             gl::VertexAttribPointer(
+//                 5,
+//                 1,
+//                 gl::BYTE,
+//                 gl::FALSE,
+//                 size_of::<InstanceData>() as i32,
+//                 (17 * size_of::<f32>()) as *const _,
+//             );
+//             gl::EnableVertexAttribArray(5);
+//             gl::VertexAttribDivisor(5, 1);
+//
+//             // Rectangle setup.
+//             gl::GenVertexArrays(1, &mut rect_vao);
+//             gl::GenBuffers(1, &mut rect_vbo);
+//             gl::GenBuffers(1, &mut rect_ebo);
+//             gl::BindVertexArray(rect_vao);
+//             let indices: [i32; 6] = [0, 1, 3, 1, 2, 3];
+//             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, rect_ebo);
+//             gl::BufferData(
+//                 gl::ELEMENT_ARRAY_BUFFER,
+//                 (size_of::<i32>() * indices.len()) as _,
+//                 indices.as_ptr() as *const _,
+//                 gl::STATIC_DRAW,
+//             );
+//
+//             // Cleanup.
+//             gl::BindVertexArray(0);
+//             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+//             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+//         }
+//
+//         let (msg_tx, msg_rx) = mpsc::channel();
+//
+//         let mut renderer = Self {
+//             program,
+//             rect_program,
+//             vao,
+//             ebo,
+//             vbo_instance,
+//             rect_vao,
+//             rect_vbo,
+//             atlas: Vec::new(),
+//             current_atlas: 0,
+//             active_tex: 0,
+//             batch: Batch::new(),
+//             rx: msg_rx,
+//         };
+//
+//         let atlas = Atlas::new(ATLAS_SIZE);
+//         renderer.atlas.push(atlas);
+//
+//         Ok(renderer)
+//     }
+//
+//     /// Draw all rectangles simultaneously to prevent excessive program swaps.
+//     pub fn draw_rects(&mut self, props: &SizeInfo, rects: Vec<RenderRect>) {
+//         // Swap to rectangle rendering program.
+//         unsafe {
+//             // Swap program.
+//             gl::UseProgram(self.rect_program.id);
+//
+//             // Remove padding from viewport.
+//             gl::Viewport(0, 0, props.width as i32, props.height as i32);
+//
+//             // Change blending strategy.
+//             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+//
+//             // Setup data and buffers.
+//             gl::BindVertexArray(self.rect_vao);
+//             gl::BindBuffer(gl::ARRAY_BUFFER, self.rect_vbo);
+//
+//             // Position.
+//             gl::VertexAttribPointer(
+//                 0,
+//                 2,
+//                 gl::FLOAT,
+//                 gl::FALSE,
+//                 (size_of::<f32>() * 2) as _,
+//                 ptr::null(),
+//             );
+//             gl::EnableVertexAttribArray(0);
+//         }
+//
+//         // Draw all the rects.
+//         for rect in rects {
+//             self.render_rect(&rect, props);
+//         }
+//
+//         // Deactivate rectangle program again.
+//         unsafe {
+//             // Reset blending strategy.
+//             gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
+//
+//             // Reset data and buffers.
+//             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+//             gl::BindVertexArray(0);
+//
+//             let padding_x = props.padding_x as i32;
+//             let padding_y = props.padding_y as i32;
+//             let width = props.width as i32;
+//             let height = props.height as i32;
+//             gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
+//
+//             // Disable program.
+//             gl::UseProgram(0);
+//         }
+//     }
+//
+//     pub fn with_api<F, T>(
+//         &mut self,
+//         config: &UIConfig,
+//         cursor_config: Cursor,
+//         props: &SizeInfo,
+//         func: F,
+//     ) -> T
+//     where
+//         F: FnOnce(RenderApi<'_>) -> T,
+//     {
+//         unsafe {
+//             gl::UseProgram(self.program.id);
+//             self.program.set_term_uniforms(props);
+//
+//             gl::BindVertexArray(self.vao);
+//             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
+//             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
+//             gl::ActiveTexture(gl::TEXTURE0);
+//         }
+//
+//         let res = func(RenderApi {
+//             active_tex: &mut self.active_tex,
+//             batch: &mut self.batch,
+//             atlas: &mut self.atlas,
+//             current_atlas: &mut self.current_atlas,
+//             program: &mut self.program,
+//             config,
+//             cursor_config,
+//         });
+//
+//         unsafe {
+//             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+//             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+//             gl::BindVertexArray(0);
+//
+//             gl::UseProgram(0);
+//         }
+//
+//         res
+//     }
+//
+//     pub fn with_loader<F, T>(&mut self, func: F) -> T
+//     where
+//         F: FnOnce(LoaderApi<'_>) -> T,
+//     {
+//         unsafe {
+//             gl::ActiveTexture(gl::TEXTURE0);
+//         }
+//
+//         func(LoaderApi {
+//             active_tex: &mut self.active_tex,
+//             atlas: &mut self.atlas,
+//             current_atlas: &mut self.current_atlas,
+//         })
+//     }
+//
+//     pub fn reload_shaders(&mut self, props: &SizeInfo) {
+//         info!("Reloading shaders...");
+//         let result = (TextShaderProgram::new(), RectShaderProgram::new());
+//         let (program, rect_program) = match result {
+//             (Ok(program), Ok(rect_program)) => {
+//                 unsafe {
+//                     gl::UseProgram(program.id);
+//                     program.update_projection(
+//                         props.width,
+//                         props.height,
+//                         props.padding_x,
+//                         props.padding_y,
+//                     );
+//                     gl::UseProgram(0);
+//                 }
+//
+//                 info!("... successfully reloaded shaders");
+//                 (program, rect_program)
+//             }
+//             (Err(err), _) | (_, Err(err)) => {
+//                 error!("{}", err);
+//                 return;
+//             }
+//         };
+//
+//         self.active_tex = 0;
+//         self.program = program;
+//         self.rect_program = rect_program;
+//     }
+//
+//     pub fn resize(&mut self, size: &SizeInfo) {
+//         // Viewport.
+//         unsafe {
+//             gl::Viewport(
+//                 size.padding_x as i32,
+//                 size.padding_y as i32,
+//                 size.width as i32 - 2 * size.padding_x as i32,
+//                 size.height as i32 - 2 * size.padding_y as i32,
+//             );
+//
+//             // Update projection.
+//             gl::UseProgram(self.program.id);
+//             self.program.update_projection(size.width, size.height, size.padding_x, size.padding_y);
+//             gl::UseProgram(0);
+//         }
+//     }
+//
+//     /// Render a rectangle.
+//     ///
+//     /// This requires the rectangle program to be activated.
+//     fn render_rect(&mut self, rect: &RenderRect, size: &SizeInfo) {
+//         // Do nothing when alpha is fully transparent.
+//         if rect.alpha == 0. {
+//             return;
+//         }
+//
+//         // Calculate rectangle position.
+//         let center_x = size.width / 2.;
+//         let center_y = size.height / 2.;
+//         let x = (rect.x - center_x) / center_x;
+//         let y = -(rect.y - center_y) / center_y;
+//         let width = rect.width / center_x;
+//         let height = rect.height / center_y;
+//
+//         unsafe {
+//             // Setup vertices.
+//             let vertices: [f32; 8] = [x + width, y, x + width, y - height, x, y - height, x, y];
+//
+//             // Load vertex data into array buffer.
+//             gl::BufferData(
+//                 gl::ARRAY_BUFFER,
+//                 (size_of::<f32>() * vertices.len()) as _,
+//                 vertices.as_ptr() as *const _,
+//                 gl::STATIC_DRAW,
+//             );
+//
+//             // Color.
+//             self.rect_program.set_color(rect.color, rect.alpha);
+//
+//             // Draw the rectangle.
+//             gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
+//         }
+//     }
+// }
+
+// impl<'a> RenderApi<'a> {
+//     pub fn clear(&self, color: Rgb) {
+//         unsafe {
+//             let alpha = self.config.background_opacity();
+//             gl::ClearColor(
+//                 (f32::from(color.r) / 255.0).min(1.0) * alpha,
+//                 (f32::from(color.g) / 255.0).min(1.0) * alpha,
+//                 (f32::from(color.b) / 255.0).min(1.0) * alpha,
+//                 alpha,
+//             );
+//             gl::Clear(gl::COLOR_BUFFER_BIT);
+//         }
+//     }
+//
+//     #[cfg(not(any(target_os = "macos", windows)))]
+//     pub fn finish(&self) {
+//         unsafe {
+//             gl::Finish();
+//         }
+//     }
+//
+//     fn render_batch(&mut self) {
+//         unsafe {
+//             gl::BufferSubData(
+//                 gl::ARRAY_BUFFER,
+//                 0,
+//                 self.batch.size() as isize,
+//                 self.batch.instances.as_ptr() as *const _,
+//             );
+//         }
+//
+//         // Bind texture if necessary.
+//         if *self.active_tex != self.batch.tex {
+//             unsafe {
+//                 gl::BindTexture(gl::TEXTURE_2D, self.batch.tex);
+//             }
+//             *self.active_tex = self.batch.tex;
+//         }
+//
+//         unsafe {
+//             self.program.set_background_pass(true);
+//             gl::DrawElementsInstanced(
+//                 gl::TRIANGLES,
+//                 6,
+//                 gl::UNSIGNED_INT,
+//                 ptr::null(),
+//                 self.batch.len() as GLsizei,
+//             );
+//             self.program.set_background_pass(false);
+//             gl::DrawElementsInstanced(
+//                 gl::TRIANGLES,
+//                 6,
+//                 gl::UNSIGNED_INT,
+//                 ptr::null(),
+//                 self.batch.len() as GLsizei,
+//             );
+//         }
+//
+//         self.batch.clear();
+//     }
+//
+//     /// Render a string in a variable location. Used for printing the render timer, warnings and
+//     /// errors.
+//     pub fn render_string(
+//         &mut self,
+//         glyph_cache: &mut GlyphCache,
+//         line: Line,
+//         string: &str,
+//         fg: Rgb,
+//         bg: Option<Rgb>,
+//     ) {
+//         let bg_alpha = bg.map(|_| 1.0).unwrap_or(0.0);
+//
+//         let cells = string
+//             .chars()
+//             .enumerate()
+//             .map(|(i, c)| RenderableCell {
+//                 line,
+//                 column: Column(i),
+//                 inner: RenderableCellContent::Chars({
+//                     let mut chars = [' '; cell::MAX_ZEROWIDTH_CHARS + 1];
+//                     chars[0] = c;
+//                     chars
+//                 }),
+//                 flags: Flags::empty(),
+//                 bg_alpha,
+//                 fg,
+//                 bg: bg.unwrap_or(Rgb { r: 0, g: 0, b: 0 }),
+//             })
+//             .collect::<Vec<_>>();
+//
+//         for cell in cells {
+//             self.render_cell(cell, glyph_cache);
+//         }
+//     }
+//
+//     #[inline]
+//     fn add_render_item(&mut self, cell: RenderableCell, glyph: &Glyph) {
+//         // Flush batch if tex changing.
+//         if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
+//             self.render_batch();
+//         }
+//
+//         self.batch.add_item(cell, glyph);
+//
+//         // Render batch and clear if it's full.
+//         if self.batch.full() {
+//             self.render_batch();
+//         }
+//     }
+//
+//     pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+//         let chars = match cell.inner {
+//             RenderableCellContent::Cursor(cursor_key) => {
+//                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
+//                 let metrics = glyph_cache.metrics;
+//                 let glyph = glyph_cache.cursor_cache.entry(cursor_key).or_insert_with(|| {
+//                     self.load_glyph(&cursor::get_cursor_glyph(
+//                         cursor_key.style,
+//                         metrics,
+//                         self.config.font.offset.x,
+//                         self.config.font.offset.y,
+//                         cursor_key.is_wide,
+//                         self.cursor_config.thickness(),
+//                     ))
+//                 });
+//                 self.add_render_item(cell, glyph);
+//                 return;
+//             }
+//             RenderableCellContent::Chars(chars) => chars,
+//         };
+//
+//         // Get font key for cell.
+//         let font_key = match cell.flags & Flags::BOLD_ITALIC {
+//             Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
+//             Flags::ITALIC => glyph_cache.italic_key,
+//             Flags::BOLD => glyph_cache.bold_key,
+//             _ => glyph_cache.font_key,
+//         };
+//
+//         // Don't render text of HIDDEN cells.
+//         let mut chars = if cell.flags.contains(Flags::HIDDEN) {
+//             [' '; cell::MAX_ZEROWIDTH_CHARS + 1]
+//         } else {
+//             chars
+//         };
+//
+//         // Render tabs as spaces in case the font doesn't support it.
+//         if chars[0] == '\t' {
+//             chars[0] = ' ';
+//         }
+//
+//         let mut glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
+//
+//         // Add cell to batch.
+//         let glyph = glyph_cache.get(glyph_key, self);
+//         self.add_render_item(cell, glyph);
+//
+//         // Render zero-width characters.
+//         for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
+//             glyph_key.c = *c;
+//             let mut glyph = *glyph_cache.get(glyph_key, self);
+//
+//             // The metrics of zero-width characters are based on rendering
+//             // the character after the current cell, with the anchor at the
+//             // right side of the preceding character. Since we render the
+//             // zero-width characters inside the preceding character, the
+//             // anchor has been moved to the right by one cell.
+//             glyph.left += glyph_cache.metrics.average_advance as f32;
+//
+//             self.add_render_item(cell, &glyph);
+//         }
+//     }
+// }
 
 /// Load a glyph into a texture atlas.
 ///
@@ -774,41 +774,41 @@ pub fn load_glyph(
     }
 }
 
-#[inline]
-pub fn clear_atlas(atlas: &mut Vec<Atlas>, current_atlas: &mut usize) {
-    for atlas in atlas.iter_mut() {
-        atlas.clear();
-    }
-    *current_atlas = 0;
-}
-
-impl<'a> LoadGlyph for LoaderApi<'a> {
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
-        load_glyph(self.active_tex, self.atlas, self.current_atlas, rasterized)
-    }
-
-    fn clear(&mut self) {
-        clear_atlas(self.atlas, self.current_atlas)
-    }
-}
-
-impl<'a> LoadGlyph for RenderApi<'a> {
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
-        load_glyph(self.active_tex, self.atlas, self.current_atlas, rasterized)
-    }
-
-    fn clear(&mut self) {
-        clear_atlas(self.atlas, self.current_atlas)
-    }
-}
-
-impl<'a> Drop for RenderApi<'a> {
-    fn drop(&mut self) {
-        if !self.batch.is_empty() {
-            self.render_batch();
-        }
-    }
-}
+// #[inline]
+// pub fn clear_atlas(atlas: &mut Vec<Atlas>, current_atlas: &mut usize) {
+//     for atlas in atlas.iter_mut() {
+//         atlas.clear();
+//     }
+//     *current_atlas = 0;
+// }
+//
+// impl<'a> LoadGlyph for LoaderApi<'a> {
+//     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+//         load_glyph(self.active_tex, self.atlas, self.current_atlas, rasterized)
+//     }
+//
+//     fn clear(&mut self) {
+//         clear_atlas(self.atlas, self.current_atlas)
+//     }
+// }
+//
+// impl<'a> LoadGlyph for RenderApi<'a> {
+//     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+//         load_glyph(self.active_tex, self.atlas, self.current_atlas, rasterized)
+//     }
+//
+//     fn clear(&mut self) {
+//         clear_atlas(self.atlas, self.current_atlas)
+//     }
+// }
+//
+// impl<'a> Drop for RenderApi<'a> {
+//     fn drop(&mut self) {
+//         if !self.batch.is_empty() {
+//             self.render_batch();
+//         }
+//     }
+// }
 
 /// Manages a single texture atlas.
 ///
