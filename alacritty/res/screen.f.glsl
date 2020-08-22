@@ -1,6 +1,7 @@
-#version 330 core
+#version 300 es
+precision mediump float;
 
-layout(location = 0, index = 0) out vec4 color;
+layout(location = 0) out vec4 color;
 uniform sampler2D glyph_ref;
 uniform sampler2D atlas;
 uniform sampler2D color_fg;
@@ -13,7 +14,7 @@ uniform vec3 cursor_color;
 
 vec3 drawGlyph(vec4 glyph, vec2 cell_pix, vec3 bg, vec3 fg) {
 	vec2 atlas_pix = glyph.xy * atlas_dim.zw + atlas_dim.xy + cell_pix;
-	vec4 mask = texture(atlas, atlas_pix / textureSize(atlas, 0));
+	vec4 mask = texture(atlas, atlas_pix / vec2(textureSize(atlas, 0)));
 
 	//return mask.rgb;
 
@@ -29,7 +30,7 @@ void main() {
 	uv.xy -= screen_dim.xy;
 
 	vec2 cell = floor(uv / cell_dim);
-	vec2 screen_cells = textureSize(glyph_ref, 0);
+	vec2 screen_cells = vec2(textureSize(glyph_ref, 0));
 
 	if (any(lessThan(uv.xy, vec2(0.)))
 			|| any(greaterThanEqual(cell, screen_cells))
