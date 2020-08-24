@@ -61,7 +61,7 @@ void main() {
 		//color.g = 1.;
 	}
 
-	if (cell_pix.x < atlas_dim.x && cell.x > 0.) {
+	if (cell_pix.x < (atlas_dim.z - cell_dim.x) && cell.x > 0.) {
 		vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells;
 		vec4 glyph = texture(glyph_ref, tuv);
 		vec3 fg = texture(color_fg, tuv).rgb;
@@ -86,5 +86,5 @@ void main() {
 	//color = vec4(bg.rgb, 1.);
 	//color = vec4(mask.rgb, 1.);
 	//color = vec4(cursor_color, 1.);
-	//color = mix(color, vec4(texture(atlas, uv / textureSize(atlas, 0)).rgb, 1), 1.);
+	//color = mix(color, vec4(texture(atlas, uv / vec2(textureSize(atlas, 0))).rgb, 1.), 1.);
 }

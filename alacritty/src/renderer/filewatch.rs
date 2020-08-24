@@ -1,5 +1,3 @@
-use std;
-
 #[derive(Debug)]
 struct Metadata {
     mod_time: std::time::SystemTime,

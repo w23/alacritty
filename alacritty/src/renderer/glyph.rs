@@ -113,17 +113,9 @@ impl GlyphCache {
             cell_size,
         };
 
-        loader.clear(cell_size);
-        cache.load_common_glyphs(loader);
+        cache.clear_cache_with_common_glyphs(loader);
 
         Ok(cache)
-    }
-
-    fn load_glyphs_for_font<L: LoadGlyph>(&mut self, font: FontKey, loader: &mut L) {
-        let size = self.font_size;
-        for i in 32u8..=126u8 {
-            self.get(GlyphKey { font_key: font, c: i as char, size }, loader);
-        }
     }
 
     /// Computes font keys for (Regular, Bold, Italic, Bold Italic).
@@ -191,6 +183,21 @@ impl GlyphCache {
         FontDesc::new(desc.family.clone(), style)
     }
 
+    fn rasterize_glyph(
+        glyph_key: GlyphKey,
+        rasterizer: &mut Rasterizer,
+        glyph_offset: Delta<i8>,
+        metrics: &crossfont::Metrics,
+    ) -> RasterizedGlyph {
+        let mut rasterized = rasterizer.get_glyph(glyph_key).unwrap_or_else(|_| Default::default());
+
+        rasterized.left += i32::from(glyph_offset.x);
+        rasterized.top += i32::from(glyph_offset.y);
+        rasterized.top -= metrics.descent as i32;
+
+        rasterized
+    }
+
     pub fn get<L>(&mut self, glyph_key: GlyphKey, loader: &mut L) -> &Glyph
     where
         L: LoadGlyph,
@@ -198,14 +205,9 @@ impl GlyphCache {
         let glyph_offset = self.glyph_offset;
         let rasterizer = &mut self.rasterizer;
         let metrics = &self.metrics;
+
         self.cache.entry(glyph_key).or_insert_with(|| {
-            let mut rasterized =
-                rasterizer.get_glyph(glyph_key).unwrap_or_else(|_| Default::default());
-
-            rasterized.left += i32::from(glyph_offset.x);
-            rasterized.top += i32::from(glyph_offset.y);
-            rasterized.top -= metrics.descent as i32;
-
+            let rasterized = Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics);
             loader.load_glyph(&rasterized)
         })
     }
@@ -214,12 +216,9 @@ impl GlyphCache {
     pub fn clear_glyph_cache<L: LoadGlyph>(&mut self, config: &Config, loader: &mut L) {
         let (cell_width, cell_height) = Self::compute_cell_size(config, &self.metrics);
         self.cell_size = Vec2::new(cell_width as i32, cell_height as i32);
-
-        loader.clear(self.cell_size);
         self.cache = HashMap::default();
         self.cursor_cache = HashMap::default();
-
-        self.load_common_glyphs(loader);
+        self.clear_cache_with_common_glyphs(loader);
     }
 
     pub fn update_font_size<L: LoadGlyph>(
@@ -258,11 +257,41 @@ impl GlyphCache {
     }
 
     /// Prefetch glyphs that are almost guaranteed to be loaded anyways.
-    fn load_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L) {
-        self.load_glyphs_for_font(self.font_key, loader);
-        self.load_glyphs_for_font(self.bold_italic_key, loader);
-        self.load_glyphs_for_font(self.italic_key, loader);
-        self.load_glyphs_for_font(self.bold_italic_key, loader);
+    fn clear_cache_with_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L) {
+        let glyph_offset = self.glyph_offset;
+        let metrics = &self.metrics;
+        let font_size = self.font_size;
+        let rasterizer = &mut self.rasterizer;
+
+        type Glyphs = Vec<(GlyphKey, RasterizedGlyph)>;
+        let glyphs: Glyphs = [self.font_key, self.bold_key, self.italic_key, self.bold_italic_key]
+            .iter()
+            .flat_map(|font| {
+                (32u8..=126u8)
+                    .map(|c| {
+                        let glyph_key = GlyphKey { font_key: *font, c: c as char, size: font_size };
+                        (
+                            glyph_key,
+                            Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics),
+                        )
+                    })
+                    .collect::<Glyphs>()
+            })
+            .collect();
+
+        let mut cell_size = self.cell_size;
+        for glyph in &glyphs {
+            cell_size.x = std::cmp::max(cell_size.x, glyph.1.width);
+            cell_size.y = std::cmp::max(cell_size.y, glyph.1.height);
+        }
+
+        info!("Max glyph size: {:?}", cell_size);
+
+        loader.clear(cell_size);
+
+        for glyph in glyphs {
+            self.cache.entry(glyph.0).or_insert_with(|| loader.load_glyph(&glyph.1));
+        }
     }
 
     /// Calculate font metrics without access to a glyph cache.
@@ -271,7 +300,6 @@ impl GlyphCache {
         let regular_desc = GlyphCache::make_desc(&font.normal(), Slant::Normal, Weight::Normal);
         let regular = Self::load_regular_font(&mut rasterizer, &regular_desc, font.size)?;
         rasterizer.get_glyph(GlyphKey { font_key: regular, c: 'm', size: font.size })?;
-
         rasterizer.metrics(regular, font.size)
     }
 

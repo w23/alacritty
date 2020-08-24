@@ -9,7 +9,7 @@ use log::*;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
-static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 50, y: 25 };
+static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
 
 #[derive(Debug, Copy, Clone)]
 pub struct Vec2<T: Copy> {
@@ -109,7 +109,7 @@ pub struct GridAtlas {
 impl GridAtlas {
     pub fn new(cell_size: Vec2<i32>) -> Self {
         // FIXME limit atlas size by 256x256 cells
-        let atlas_cell_size = cell_size * (GRID_ATLAS_PAD_PCT + 100) / 100;
+        let atlas_cell_size = (cell_size * (GRID_ATLAS_PAD_PCT + 100) + 99) / 100;
 
         let ret = Self {
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
@@ -175,7 +175,7 @@ impl GridAtlas {
             // 2. upload once before drawing by column/line subrect
             let off_x = self.cell_offset.x + rasterized.left;
             let tex_x = off_x + column * self.cell_size.x;
-            let off_y = -self.cell_offset.y + self.cell_size.y - rasterized.top; //+ rasterized.height; // - rasterized.top;
+            let off_y = -self.cell_offset.y + self.cell_size.y - rasterized.top;
             let tex_y = off_y + line * self.cell_size.y;
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
@@ -192,7 +192,7 @@ impl GridAtlas {
             gl::BindTexture(gl::TEXTURE_2D, 0);
 
             debug!(
-                "{} {},{} {}x{} {},{} => l={} c={} {},{}",
+                "'{}' {},{} {}x{} {},{} => l={} c={} {},{}",
                 rasterized.c,
                 rasterized.left,
                 rasterized.top,

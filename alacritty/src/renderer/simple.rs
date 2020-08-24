@@ -113,7 +113,7 @@ impl SimpleRenderer {
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
         }
 
-        let mut renderer = Self {
+        Ok(Self {
             atlas: None,
             screen_glyphs_ref: Vec::new(),
             screen_colors_fg: Vec::new(),
@@ -135,9 +135,7 @@ impl SimpleRenderer {
             rect_program: RectShaderProgram::new()?,
             rect_vao,
             rect_vbo,
-        };
-
-        Ok(renderer)
+        })
     }
 
     pub fn set_cursor(
