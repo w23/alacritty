@@ -269,7 +269,9 @@ impl SimpleRenderer {
             gl::Uniform4f(
                 self.program.u_atlas_dim,
                 atlas_dims.offset.x as f32,
-                atlas_dims.offset.y as f32,
+                //atlas_dims.offset.y as f32,
+                // Offset needs to be relative to "top" inverted-y OpenGL texture coords
+                (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
                 atlas_dims.size.x as f32,
                 atlas_dims.size.y as f32,
             );

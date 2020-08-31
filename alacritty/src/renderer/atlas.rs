@@ -109,9 +109,11 @@ pub struct GridAtlas {
 impl GridAtlas {
     pub fn new(cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
         // FIXME limit atlas size by 256x256 cells
-        let atlas_cell_size = (cell_size * (GRID_ATLAS_PAD_PCT + 100) + 99) / 100;
-        let cell_offset = cell_offset + (atlas_cell_size - cell_size) / 2;
-        let atlas_cell_size = atlas_cell_size + cell_offset;
+
+        // FIXME add guard padding back
+        // ??? let atlas_cell_size = (cell_size * (GRID_ATLAS_PAD_PCT + 100) + 99) / 100;
+        // ??? let cell_offset = cell_offset + (atlas_cell_size - cell_size) / 2;
+        let atlas_cell_size = cell_size + cell_offset;
 
         let ret = Self {
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
@@ -130,6 +132,58 @@ impl GridAtlas {
     }
 
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
+        if self.free_line >= self.cell_size.y {
+            return Err(AtlasError::Full);
+        }
+
+        let line = self.free_line;
+        let column = self.free_column;
+
+        /* Atlas cell metrics in logical glyph space
+         *   .----------------.<-- single glyph cell in atlas texture (self.cell_size)
+         *   |                |
+         *   |    .------.<---+---- rasterized glyph bbox (width, height)
+         *   |    |  ##  |    |^
+         *   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped on screen w/o overlap (not really used in atlas explicitly)
+         *   |  . |#    #| .  ||
+         *   |  . |######| .  ||--- rasterized.top, relative to baseline/origin.y
+         *   |  . |#    #| .  ||
+         *   |  . |#    #| .  ||
+         *   |  . '------'-.  |v
+         *   |  . . . . . . --+--- baseline
+         *   |  ^             |
+         *   |  |             |
+         *   '--+-------------'
+         *   ^  |
+         *   |  `-logical monospace grid cell origin, (0, 0)
+         *   `- atlas cell origin, -self.cell_offset relative to origin
+         *
+         * THIS BEAUTY NOW NEEDS TO BE MAPPED TO INVERSE OPENGL TEXTURE SPACE:
+         *
+         *   .----------------.-------
+         *   |                |^   ^
+         *   |  . . . . . .   ||---+-- self.cell_size.y
+         *   |  . .------.-.--++---|
+         *   |  . |#    #| .  || ^ |
+         *   |  . |#    #| .  || | |
+         *   |  . |######| .  || |-+--- rasterized.height
+         *   |  . |#    #| .  || | |
+         *   |  . | #  # | .  || | |-- rasterized.top
+         *   |    |  ##  |    || v v
+         *   |    '------'----|+-----.
+         *   |                |v      } offset.y = self.cell_size.y - rasterized.top
+         *   '----------------'------`
+         *   ^
+         *   `- atlas cell texture origin (0, 0)
+         *
+         */
+
+        let off_x = self.cell_offset.x + rasterized.left;
+        let off_y = self.cell_size.y - rasterized.top;
+
+        let tex_x = off_x + column * self.cell_size.x;
+        let tex_y = off_y + line * self.cell_size.y;
+
         // FIXME proper bounds/offset check
         if rasterized.width + self.cell_offset.x > self.cell_size.x
             || rasterized.height + self.cell_offset.y > self.cell_size.y
@@ -147,16 +201,9 @@ impl GridAtlas {
             // });
         }
 
-        if self.free_line >= self.cell_size.y {
-            return Err(AtlasError::Full);
-        }
-
         // FIXME don't do this:
         let wide = rasterized.width > self.cell_size.x * 3 / 2;
-
         let colored;
-        let line = self.free_line;
-        let column = self.free_column;
 
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, self.tex);
@@ -176,15 +223,11 @@ impl GridAtlas {
             // TODO optimize
             // 1. only copy into internal storage
             // 2. upload once before drawing by column/line subrect
-            let off_x = self.cell_offset.x + rasterized.left;
-            let tex_x = off_x + column * self.cell_size.x;
-            let off_y = self.cell_size.y - (rasterized.top - self.cell_offset.y);
-            let tex_y = off_y + line * self.cell_size.y;
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
-                std::cmp::max(0, tex_x),
-                std::cmp::max(0, tex_y),
+                std::cmp::max(0, tex_x), // FIXME
+                std::cmp::max(0, tex_y), // FIXME
                 rasterized.width,
                 rasterized.height,
                 format,
@@ -193,22 +236,22 @@ impl GridAtlas {
             );
 
             gl::BindTexture(gl::TEXTURE_2D, 0);
-
-            debug!(
-                "'{}' {},{} {}x{} {},{} => l={} c={} {},{}",
-                rasterized.c,
-                rasterized.left,
-                rasterized.top,
-                rasterized.width,
-                rasterized.height,
-                off_x,
-                off_y,
-                line,
-                column,
-                tex_x,
-                tex_y,
-            );
         }
+
+        debug!(
+            "'{}' {},{} {}x{} {},{} => l={} c={} {},{}",
+            rasterized.c,
+            rasterized.left,
+            rasterized.top,
+            rasterized.width,
+            rasterized.height,
+            off_x,
+            off_y,
+            line,
+            column,
+            tex_x,
+            tex_y,
+        );
 
         self.free_column += if wide { 2 } else { 1 };
         if self.free_column == self.grid_size.x {

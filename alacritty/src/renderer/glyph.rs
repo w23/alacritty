@@ -265,7 +265,7 @@ impl GlyphCache {
 
         let cell_size = self.cell_size;
         let mut atlas_cell_size = self.cell_size;
-        let mut cell_offset = Vec2 { x: 0, y: 0 };
+        let mut atlas_cell_offset = Vec2 { x: 0, y: 0 };
         type Glyphs = Vec<(GlyphKey, RasterizedGlyph)>;
         let glyphs: Glyphs = [self.font_key, self.bold_key, self.italic_key, self.bold_italic_key]
             .iter()
@@ -276,20 +276,14 @@ impl GlyphCache {
                         let glyph =
                             Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics);
 
-                        // FIXME grow x extent properly
-                        atlas_cell_size.x = std::cmp::max(
-                            atlas_cell_size.x,
-                            std::cmp::max(cell_size.x + glyph.left, glyph.width + glyph.left),
-                        );
+                        atlas_cell_size.x = std::cmp::max( atlas_cell_size.x, glyph.left + glyph.width);
+                        atlas_cell_size.y = std::cmp::max(atlas_cell_size.y, glyph.top);
 
-                        cell_offset.y = std::cmp::max(cell_offset.y, glyph.top - cell_size.y);
-                        atlas_cell_size.y = std::cmp::max(
-                            atlas_cell_size.y,
-                            atlas_cell_size.y + glyph.height - glyph.top,
-                        );
+												atlas_cell_offset.x = std::cmp::max(atlas_cell_offset.x, -glyph.left);
+                        atlas_cell_offset.y = std::cmp::max(atlas_cell_offset.y, glyph.height - glyph.top);
 
                         debug!(
-                            "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell = {:?} offset={:?}",
+                            "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell={:?} offset={:?}",
                             glyph.c,
                             glyph.left,
                             glyph.top,
@@ -297,7 +291,7 @@ impl GlyphCache {
                             glyph.height,
                             glyph_offset,
                             atlas_cell_size,
-                            cell_offset,
+                            atlas_cell_offset,
                         );
 
                         (glyph_key, glyph)
@@ -308,7 +302,7 @@ impl GlyphCache {
 
         info!("Max glyph size: {:?}", cell_size);
 
-        loader.clear(atlas_cell_size, cell_offset);
+        loader.clear(atlas_cell_size, atlas_cell_offset);
 
         for glyph in glyphs {
             self.cache.entry(glyph.0).or_insert_with(|| loader.load_glyph(&glyph.1));
