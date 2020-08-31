@@ -87,4 +87,13 @@ void main() {
 	//color = vec4(mask.rgb, 1.);
 	//color = vec4(cursor_color, 1.);
 	//color = mix(color, vec4(texture(atlas, uv / vec2(textureSize(atlas, 0))).rgb, 1.), 1.);
+	if (false) {
+		color = vec4(0., 0., 0., 1.);
+		vec2 cp = mod(uv, atlas_dim.zw);
+		color.rg = fract(uv / atlas_dim.zw);
+		color.rgb += texture(atlas, uv / vec2(textureSize(atlas, 0))).rgb;
+		color.b += step(cp.y, atlas_dim.y);
+		//color.b += step(cp.y, 15.);
+		//color = mix(color, vec4(, 1.), 1.);
+	}
 }

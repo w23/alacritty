@@ -350,8 +350,8 @@ impl LoadGlyph for SimpleRenderer {
         }
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>) {
-        self.atlas = Some(GridAtlas::new(cell_size));
+    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        self.atlas = Some(GridAtlas::new(cell_size, cell_offset));
     }
 }
 
@@ -562,8 +562,8 @@ impl<'a> LoadGlyph for RenderContext<'a> {
         self.this.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>) {
-        LoadGlyph::clear(self.this, cell_size);
+    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        LoadGlyph::clear(self.this, cell_size, cell_offset);
     }
 }
 
@@ -577,7 +577,7 @@ impl<'a> LoadGlyph for LoaderApi<'a> {
         self.renderer.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>) {
-        LoadGlyph::clear(self.renderer, cell_size);
+    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        LoadGlyph::clear(self.renderer, cell_size, cell_offset);
     }
 }

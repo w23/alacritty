@@ -21,7 +21,7 @@ pub trait LoadGlyph {
     /// Clear any state accumulated from previous loaded glyphs.
     ///
     /// This can, for instance, be used to reset the texture Atlas.
-    fn clear(&mut self, cell_size: Vec2<i32>);
+    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>);
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -263,6 +263,9 @@ impl GlyphCache {
         let font_size = self.font_size;
         let rasterizer = &mut self.rasterizer;
 
+        let cell_size = self.cell_size;
+        let mut atlas_cell_size = self.cell_size;
+        let mut cell_offset = Vec2 { x: 0, y: 0 };
         type Glyphs = Vec<(GlyphKey, RasterizedGlyph)>;
         let glyphs: Glyphs = [self.font_key, self.bold_key, self.italic_key, self.bold_italic_key]
             .iter()
@@ -270,24 +273,42 @@ impl GlyphCache {
                 (32u8..=126u8)
                     .map(|c| {
                         let glyph_key = GlyphKey { font_key: *font, c: c as char, size: font_size };
-                        (
-                            glyph_key,
-                            Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics),
-                        )
+                        let glyph =
+                            Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics);
+
+                        // FIXME grow x extent properly
+                        atlas_cell_size.x = std::cmp::max(
+                            atlas_cell_size.x,
+                            std::cmp::max(cell_size.x + glyph.left, glyph.width + glyph.left),
+                        );
+
+                        cell_offset.y = std::cmp::max(cell_offset.y, glyph.top - cell_size.y);
+                        atlas_cell_size.y = std::cmp::max(
+                            atlas_cell_size.y,
+                            atlas_cell_size.y + glyph.height - glyph.top,
+                        );
+
+                        debug!(
+                            "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell = {:?} offset={:?}",
+                            glyph.c,
+                            glyph.left,
+                            glyph.top,
+                            glyph.width,
+                            glyph.height,
+                            glyph_offset,
+                            atlas_cell_size,
+                            cell_offset,
+                        );
+
+                        (glyph_key, glyph)
                     })
                     .collect::<Glyphs>()
             })
             .collect();
 
-        let mut cell_size = self.cell_size;
-        for glyph in &glyphs {
-            cell_size.x = std::cmp::max(cell_size.x, glyph.1.width);
-            cell_size.y = std::cmp::max(cell_size.y, glyph.1.height);
-        }
-
         info!("Max glyph size: {:?}", cell_size);
 
-        loader.clear(cell_size);
+        loader.clear(atlas_cell_size, cell_offset);
 
         for glyph in glyphs {
             self.cache.entry(glyph.0).or_insert_with(|| loader.load_glyph(&glyph.1));
