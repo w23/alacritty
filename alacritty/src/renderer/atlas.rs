@@ -184,13 +184,20 @@ impl GridAtlas {
         let tex_x = off_x + column * self.cell_size.x;
         let tex_y = off_y + line * self.cell_size.y;
 
-        // FIXME proper bounds/offset check
-        if rasterized.width + self.cell_offset.x > self.cell_size.x
-            || rasterized.height + self.cell_offset.y > self.cell_size.y
+        if off_x < 0
+            || off_y < 0
+            || off_x + rasterized.width > self.cell_size.x
+            || off_y + rasterized.height > self.cell_size.y
         {
             error!(
-                "FIXME: glyph '{}' {},{} {}x{} doesn't fit into atlas cell",
-                rasterized.c, rasterized.left, rasterized.top, rasterized.width, rasterized.height,
+                "FIXME: glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
+                rasterized.c,
+                rasterized.left,
+                rasterized.top,
+                rasterized.width,
+                rasterized.height,
+                self.cell_size,
+                self.cell_offset,
             );
 
             // return Err(AtlasError::TooBig {
@@ -228,8 +235,9 @@ impl GridAtlas {
                 0,
                 std::cmp::max(0, tex_x), // FIXME
                 std::cmp::max(0, tex_y), // FIXME
-                rasterized.width,
-                rasterized.height,
+                rasterized.width,        // FIXME limit width with stride
+                //std::cmp::min(rasterized.width, self.cell_size.x),
+                std::cmp::min(rasterized.height, self.cell_size.y),
                 format,
                 gl::UNSIGNED_BYTE,
                 buf.as_ptr() as *const _,
