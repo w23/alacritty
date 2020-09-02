@@ -9,7 +9,7 @@ use log::*;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
-static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 0, y: 0 };
+static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
 
 #[derive(Debug, Copy, Clone)]
 pub struct Vec2<T: Copy> {
@@ -102,6 +102,7 @@ pub struct GridAtlas {
     cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
     grid_size: Vec2<i32>,
+    half_padding: Vec2<i32>,
     free_line: i32,
     free_column: i32,
 }
@@ -111,14 +112,19 @@ impl GridAtlas {
         // FIXME limit atlas size by 256x256 cells
 
         // FIXME add guard padding back
-        // ??? let atlas_cell_size = (cell_size * (GRID_ATLAS_PAD_PCT + 100) + 99) / 100;
-        // ??? let cell_offset = cell_offset + (atlas_cell_size - cell_size) / 2;
         let atlas_cell_size = cell_size + cell_offset;
+        let padding = (atlas_cell_size * GRID_ATLAS_PAD_PCT + 99) / 100;
+        let half_padding = padding / 2;
+        let cell_offset = cell_offset + half_padding;
+        let atlas_cell_size = atlas_cell_size + padding;
+
+        debug!("atlas padding: {:?}", padding);
 
         let ret = Self {
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
             cell_size: atlas_cell_size,
             cell_offset,
+            half_padding,
             grid_size: Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size,
             free_line: 0,
             free_column: 1,
@@ -179,7 +185,7 @@ impl GridAtlas {
          */
 
         let off_x = self.cell_offset.x + rasterized.left;
-        let off_y = self.cell_size.y - rasterized.top;
+        let off_y = self.cell_size.y - rasterized.top - self.half_padding.y;
 
         let tex_x = off_x + column * self.cell_size.x;
         let tex_y = off_y + line * self.cell_size.y;
