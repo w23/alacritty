@@ -16,7 +16,7 @@ use {
         },
     },
     log::*,
-    std::{mem::size_of, ptr},
+    std::ptr,
 };
 
 use crossfont::{GlyphKey, RasterizedGlyph};
@@ -24,7 +24,9 @@ use crossfont::{GlyphKey, RasterizedGlyph};
 use alacritty_terminal::config::Cursor;
 
 use super::atlas::*;
+use super::math::*;
 use super::shade::*;
+use super::solidrect;
 use super::texture::*;
 
 #[derive(Debug, Clone)]
@@ -57,9 +59,7 @@ pub struct SimpleRenderer {
     cursor_glyph: [f32; 2],
     cursor_color: Rgb,
 
-    rect_program: RectShaderProgram,
-    rect_vao: GLuint,
-    rect_vbo: GLuint,
+    rectifier: solidrect::Rectifier,
 }
 
 impl SimpleRenderer {
@@ -70,10 +70,6 @@ impl SimpleRenderer {
 
         let mut vao: GLuint = 0;
         let mut vbo: GLuint = 0;
-
-        let mut rect_vao: GLuint = 0;
-        let mut rect_vbo: GLuint = 0;
-        let mut rect_ebo: GLuint = 0;
 
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
@@ -91,20 +87,6 @@ impl SimpleRenderer {
                 std::mem::size_of_val(&vertices) as isize,
                 vertices.as_ptr() as *const _,
                 gl::STREAM_DRAW,
-            );
-
-            // Rectangle setup.
-            gl::GenVertexArrays(1, &mut rect_vao);
-            gl::GenBuffers(1, &mut rect_vbo);
-            gl::GenBuffers(1, &mut rect_ebo);
-            gl::BindVertexArray(rect_vao);
-            let indices: [i32; 6] = [0, 1, 3, 1, 2, 3];
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, rect_ebo);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (size_of::<i32>() * indices.len()) as _,
-                indices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
             );
 
             // Cleanup.
@@ -132,9 +114,7 @@ impl SimpleRenderer {
             cursor_glyph: [-1.0; 2],
             cursor_color: Rgb { r: 0, g: 0, b: 0 },
 
-            rect_program: RectShaderProgram::new()?,
-            rect_vao,
-            rect_vbo,
+            rectifier: solidrect::Rectifier::new()?,
         })
     }
 
@@ -149,43 +129,6 @@ impl SimpleRenderer {
         self.cursor_cell = [column as f32, line as f32];
         self.cursor_glyph = [glyph_x, glyph_y];
         self.cursor_color = color;
-    }
-
-    /// Render a rectangle.
-    ///
-    /// This requires the rectangle program to be activated.
-    fn render_rect(&mut self, rect: &RenderRect, size: &SizeInfo) {
-        // Do nothing when alpha is fully transparent.
-        if rect.alpha == 0. {
-            return;
-        }
-
-        // Calculate rectangle position.
-        let center_x = size.width / 2.;
-        let center_y = size.height / 2.;
-        let x = (rect.x - center_x) / center_x;
-        let y = -(rect.y - center_y) / center_y;
-        let width = rect.width / center_x;
-        let height = rect.height / center_y;
-
-        unsafe {
-            // Setup vertices.
-            let vertices: [f32; 8] = [x + width, y, x + width, y - height, x, y - height, x, y];
-
-            // Load vertex data into array buffer.
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (size_of::<f32>() * vertices.len()) as _,
-                vertices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
-
-            // Color.
-            self.rect_program.set_color(rect.color, rect.alpha);
-
-            // Draw the rectangle.
-            gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
-        }
     }
 
     pub fn begin<'a>(
@@ -499,59 +442,12 @@ impl<'a> RenderContext<'a> {
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
     pub fn draw_rects(&mut self, size_info: &term::SizeInfo, rects: Vec<RenderRect>) {
-        // Swap to rectangle rendering program.
-        unsafe {
-            // Swap program.
-            gl::UseProgram(self.this.rect_program.id);
-
-            // Remove padding from viewport.
-            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
-
-            // Change blending strategy.
-            gl::Enable(gl::BLEND);
-            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
-            // Setup data and buffers.
-            gl::BindVertexArray(self.this.rect_vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.this.rect_vbo);
-
-            // Position.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<f32>() * 2) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-        }
-
+        self.this.rectifier.begin(size_info);
         // Draw all the rects.
         for rect in rects {
-            // FIXME do in a single draw call
-            self.this.render_rect(&rect, size_info);
+            self.this.rectifier.add(&rect);
         }
-
-        // Deactivate rectangle program again.
-        unsafe {
-            // Reset blending strategy.
-            gl::Disable(gl::BLEND);
-            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            let padding_x = size_info.padding_x as i32;
-            let padding_y = size_info.padding_y as i32;
-            let width = size_info.width as i32;
-            let height = size_info.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
-        }
+        self.this.rectifier.draw();
     }
 
     pub fn draw_grid_text(&mut self) {

@@ -1,38 +1,21 @@
-use std::fmt::{self, Display, Formatter};
-use std::mem::size_of;
-use std::ptr;
-use std::sync::mpsc;
-
-use crossfont::{BitmapBuffer, /* GlyphKey, Rasterize,  */ RasterizedGlyph};
-//use log::{error, info};
-
-use alacritty_terminal::config::Cursor;
-// use alacritty_terminal::index::{Column, Line};
-// use alacritty_terminal::term::cell::{self, Flags};
-// use alacritty_terminal::term::color::Rgb;
-use alacritty_terminal::term::RenderableCell;
-
-use crate::config::ui_config::UIConfig;
-// use crate::cursor;
-use crate::gl;
-use crate::gl::types::*;
-// use crate::renderer::rects::RenderRect;
-
 pub use glyph::*;
 use shade::*;
 
 mod atlas;
 mod filewatch;
+mod math;
+mod quad;
 mod shade;
+mod solidrect;
 mod texture;
 
 pub mod glyph;
 pub mod rects;
 pub mod simple;
 
-enum Msg {
-    ShaderReload,
-}
+// enum Msg {
+//     ShaderReload,
+// }
 
 #[derive(Debug)]
 pub enum Error {
@@ -47,8 +30,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
@@ -63,148 +46,148 @@ impl From<ShaderCreationError> for Error {
     }
 }
 
-#[derive(Debug)]
-#[repr(C)]
-struct InstanceData {
-    // Coords.
-    col: f32,
-    row: f32,
-    // Glyph offset.
-    left: f32,
-    top: f32,
-    // Glyph scale.
-    width: f32,
-    height: f32,
-    // uv offset.
-    uv_left: f32,
-    uv_bot: f32,
-    // uv scale.
-    uv_width: f32,
-    uv_height: f32,
-    // Color.
-    r: f32,
-    g: f32,
-    b: f32,
-    // Background color.
-    bg_r: f32,
-    bg_g: f32,
-    bg_b: f32,
-    bg_a: f32,
-    // Flag indicating that glyph uses multiple colors, like an Emoji.
-    multicolor: u8,
-}
+// #[derive(Debug)]
+// #[repr(C)]
+// struct InstanceData {
+//     // Coords.
+//     col: f32,
+//     row: f32,
+//     // Glyph offset.
+//     left: f32,
+//     top: f32,
+//     // Glyph scale.
+//     width: f32,
+//     height: f32,
+//     // uv offset.
+//     uv_left: f32,
+//     uv_bot: f32,
+//     // uv scale.
+//     uv_width: f32,
+//     uv_height: f32,
+//     // Color.
+//     r: f32,
+//     g: f32,
+//     b: f32,
+//     // Background color.
+//     bg_r: f32,
+//     bg_g: f32,
+//     bg_b: f32,
+//     bg_a: f32,
+//     // Flag indicating that glyph uses multiple colors, like an Emoji.
+//     multicolor: u8,
+// }
 
-#[derive(Debug)]
-pub struct QuadRenderer {
-    program: TextShaderProgram,
-    rect_program: RectShaderProgram,
-    vao: GLuint,
-    ebo: GLuint,
-    vbo_instance: GLuint,
-    rect_vao: GLuint,
-    rect_vbo: GLuint,
-    atlas: Vec<Atlas>,
-    current_atlas: usize,
-    active_tex: GLuint,
-    batch: Batch,
-    rx: mpsc::Receiver<Msg>,
-}
-
-#[derive(Debug)]
-pub struct RenderApi<'a> {
-    active_tex: &'a mut GLuint,
-    batch: &'a mut Batch,
-    atlas: &'a mut Vec<Atlas>,
-    current_atlas: &'a mut usize,
-    program: &'a mut TextShaderProgram,
-    config: &'a UIConfig,
-    cursor_config: Cursor,
-}
-
-#[derive(Debug)]
-pub struct LoaderApi<'a> {
-    active_tex: &'a mut GLuint,
-    atlas: &'a mut Vec<Atlas>,
-    current_atlas: &'a mut usize,
-}
-
-#[derive(Debug, Default)]
-pub struct Batch {
-    tex: GLuint,
-    instances: Vec<InstanceData>,
-}
-
-impl Batch {
-    #[inline]
-    pub fn new() -> Self {
-        Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
-    }
-
-    pub fn add_item(&mut self, cell: RenderableCell, glyph: &Glyph) {
-        if self.is_empty() {
-            self.tex = glyph.tex_id;
-        }
-
-        self.instances.push(InstanceData {
-            col: cell.column.0 as f32,
-            row: cell.line.0 as f32,
-
-            top: glyph.top,
-            left: glyph.left,
-            width: glyph.width,
-            height: glyph.height,
-
-            uv_bot: glyph.uv_bot,
-            uv_left: glyph.uv_left,
-            uv_width: glyph.uv_width,
-            uv_height: glyph.uv_height,
-
-            r: f32::from(cell.fg.r),
-            g: f32::from(cell.fg.g),
-            b: f32::from(cell.fg.b),
-
-            bg_r: f32::from(cell.bg.r),
-            bg_g: f32::from(cell.bg.g),
-            bg_b: f32::from(cell.bg.b),
-            bg_a: cell.bg_alpha,
-            multicolor: glyph.colored as u8,
-        });
-    }
-
-    #[inline]
-    pub fn full(&self) -> bool {
-        self.capacity() == self.len()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.instances.len()
-    }
-
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        BATCH_MAX
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn size(&self) -> usize {
-        self.len() * size_of::<InstanceData>()
-    }
-
-    pub fn clear(&mut self) {
-        self.tex = 0;
-        self.instances.clear();
-    }
-}
-
-/// Maximum items to be drawn in a batch.
-const BATCH_MAX: usize = 0x1_0000;
-const ATLAS_SIZE: i32 = 1024;
+// #[derive(Debug)]
+// pub struct QuadRenderer {
+//     program: TextShaderProgram,
+//     rect_program: RectShaderProgram,
+//     vao: GLuint,
+//     ebo: GLuint,
+//     vbo_instance: GLuint,
+//     rect_vao: GLuint,
+//     rect_vbo: GLuint,
+//     atlas: Vec<Atlas>,
+//     current_atlas: usize,
+//     active_tex: GLuint,
+//     batch: Batch,
+//     rx: mpsc::Receiver<Msg>,
+// }
+//
+// #[derive(Debug)]
+// pub struct RenderApi<'a> {
+//     active_tex: &'a mut GLuint,
+//     batch: &'a mut Batch,
+//     atlas: &'a mut Vec<Atlas>,
+//     current_atlas: &'a mut usize,
+//     program: &'a mut TextShaderProgram,
+//     config: &'a UIConfig,
+//     cursor_config: Cursor,
+// }
+//
+// #[derive(Debug)]
+// pub struct LoaderApi<'a> {
+//     active_tex: &'a mut GLuint,
+//     atlas: &'a mut Vec<Atlas>,
+//     current_atlas: &'a mut usize,
+// }
+//
+// #[derive(Debug, Default)]
+// pub struct Batch {
+//     tex: GLuint,
+//     instances: Vec<InstanceData>,
+// }
+//
+// impl Batch {
+//     #[inline]
+//     pub fn new() -> Self {
+//         Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
+//     }
+//
+//     pub fn add_item(&mut self, cell: RenderableCell, glyph: &Glyph) {
+//         if self.is_empty() {
+//             self.tex = glyph.tex_id;
+//         }
+//
+//         self.instances.push(InstanceData {
+//             col: cell.column.0 as f32,
+//             row: cell.line.0 as f32,
+//
+//             top: glyph.top,
+//             left: glyph.left,
+//             width: glyph.width,
+//             height: glyph.height,
+//
+//             uv_bot: glyph.uv_bot,
+//             uv_left: glyph.uv_left,
+//             uv_width: glyph.uv_width,
+//             uv_height: glyph.uv_height,
+//
+//             r: f32::from(cell.fg.r),
+//             g: f32::from(cell.fg.g),
+//             b: f32::from(cell.fg.b),
+//
+//             bg_r: f32::from(cell.bg.r),
+//             bg_g: f32::from(cell.bg.g),
+//             bg_b: f32::from(cell.bg.b),
+//             bg_a: cell.bg_alpha,
+//             multicolor: glyph.colored as u8,
+//         });
+//     }
+//
+//     #[inline]
+//     pub fn full(&self) -> bool {
+//         self.capacity() == self.len()
+//     }
+//
+//     #[inline]
+//     pub fn len(&self) -> usize {
+//         self.instances.len()
+//     }
+//
+//     #[inline]
+//     pub fn capacity(&self) -> usize {
+//         BATCH_MAX
+//     }
+//
+//     #[inline]
+//     pub fn is_empty(&self) -> bool {
+//         self.len() == 0
+//     }
+//
+//     #[inline]
+//     pub fn size(&self) -> usize {
+//         self.len() * size_of::<InstanceData>()
+//     }
+//
+//     pub fn clear(&mut self) {
+//         self.tex = 0;
+//         self.instances.clear();
+//     }
+// }
+//
+// /// Maximum items to be drawn in a batch.
+// const BATCH_MAX: usize = 0x1_0000;
+// const ATLAS_SIZE: i32 = 1024;
 
 // impl QuadRenderer {
 //     pub fn new() -> Result<QuadRenderer, Error> {
@@ -736,43 +719,43 @@ const ATLAS_SIZE: i32 = 1024;
 //     }
 // }
 
-/// Load a glyph into a texture atlas.
-///
-/// If the current atlas is full, a new one will be created.
-#[inline]
-pub fn load_glyph(
-    active_tex: &mut GLuint,
-    atlas: &mut Vec<Atlas>,
-    current_atlas: &mut usize,
-    rasterized: &RasterizedGlyph,
-) -> Glyph {
-    // At least one atlas is guaranteed to be in the `self.atlas` list; thus
-    // the unwrap.
-    match atlas[*current_atlas].insert(rasterized, active_tex) {
-        Ok(glyph) => glyph,
-        Err(AtlasInsertError::Full) => {
-            *current_atlas += 1;
-            if *current_atlas == atlas.len() {
-                let new = Atlas::new(ATLAS_SIZE);
-                *active_tex = 0; // Atlas::new binds a texture. Ugh this is sloppy.
-                atlas.push(new);
-            }
-            load_glyph(active_tex, atlas, current_atlas, rasterized)
-        }
-        Err(AtlasInsertError::GlyphTooLarge) => Glyph {
-            tex_id: atlas[*current_atlas].id,
-            colored: false,
-            top: 0.0,
-            left: 0.0,
-            width: 0.0,
-            height: 0.0,
-            uv_bot: 0.0,
-            uv_left: 0.0,
-            uv_width: 0.0,
-            uv_height: 0.0,
-        },
-    }
-}
+// /// Load a glyph into a texture atlas.
+// ///
+// /// If the current atlas is full, a new one will be created.
+// #[inline]
+// pub fn load_glyph(
+//     active_tex: &mut GLuint,
+//     atlas: &mut Vec<Atlas>,
+//     current_atlas: &mut usize,
+//     rasterized: &RasterizedGlyph,
+// ) -> Glyph {
+//     // At least one atlas is guaranteed to be in the `self.atlas` list; thus
+//     // the unwrap.
+//     match atlas[*current_atlas].insert(rasterized, active_tex) {
+//         Ok(glyph) => glyph,
+//         Err(AtlasInsertError::Full) => {
+//             *current_atlas += 1;
+//             if *current_atlas == atlas.len() {
+//                 let new = Atlas::new(ATLAS_SIZE);
+//                 *active_tex = 0; // Atlas::new binds a texture. Ugh this is sloppy.
+//                 atlas.push(new);
+//             }
+//             load_glyph(active_tex, atlas, current_atlas, rasterized)
+//         }
+//         Err(AtlasInsertError::GlyphTooLarge) => Glyph {
+//             tex_id: atlas[*current_atlas].id,
+//             colored: false,
+//             top: 0.0,
+//             left: 0.0,
+//             width: 0.0,
+//             height: 0.0,
+//             uv_bot: 0.0,
+//             uv_left: 0.0,
+//             uv_width: 0.0,
+//             uv_height: 0.0,
+//         },
+//     }
+// }
 
 // #[inline]
 // pub fn clear_atlas(atlas: &mut Vec<Atlas>, current_atlas: &mut usize) {
@@ -809,211 +792,3 @@ pub fn load_glyph(
 //         }
 //     }
 // }
-
-/// Manages a single texture atlas.
-///
-/// The strategy for filling an atlas looks roughly like this:
-///
-/// ```text
-///                           (width, height)
-///   ┌─────┬─────┬─────┬─────┬─────┐
-///   │ 10  │     │     │     │     │ <- Empty spaces; can be filled while
-///   │     │     │     │     │     │    glyph_height < height - row_baseline
-///   ├─────┼─────┼─────┼─────┼─────┤
-///   │ 5   │ 6   │ 7   │ 8   │ 9   │
-///   │     │     │     │     │     │
-///   ├─────┼─────┼─────┼─────┴─────┤ <- Row height is tallest glyph in row; this is
-///   │ 1   │ 2   │ 3   │ 4         │    used as the baseline for the following row.
-///   │     │     │     │           │ <- Row considered full when next glyph doesn't
-///   └─────┴─────┴─────┴───────────┘    fit in the row.
-/// (0, 0)  x->
-/// ```
-#[derive(Debug)]
-pub struct Atlas {
-    /// Texture id for this atlas.
-    id: GLuint,
-
-    /// Width of atlas.
-    width: i32,
-
-    /// Height of atlas.
-    height: i32,
-
-    /// Left-most free pixel in a row.
-    ///
-    /// This is called the extent because it is the upper bound of used pixels
-    /// in a row.
-    row_extent: i32,
-
-    /// Baseline for glyphs in the current row.
-    row_baseline: i32,
-
-    /// Tallest glyph in current row.
-    ///
-    /// This is used as the advance when end of row is reached.
-    row_tallest: i32,
-}
-
-/// Error that can happen when inserting a texture to the Atlas.
-enum AtlasInsertError {
-    /// Texture atlas is full.
-    Full,
-
-    /// The glyph cannot fit within a single texture.
-    GlyphTooLarge,
-}
-
-impl Atlas {
-    fn new(size: i32) -> Self {
-        let mut id: GLuint = 0;
-        unsafe {
-            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-            gl::GenTextures(1, &mut id);
-            gl::BindTexture(gl::TEXTURE_2D, id);
-            // Use RGBA texture for both normal and emoji glyphs, since it has no performance
-            // impact.
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGBA as i32,
-                size,
-                size,
-                0,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
-                ptr::null(),
-            );
-
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-        }
-
-        Self { id, width: size, height: size, row_extent: 0, row_baseline: 0, row_tallest: 0 }
-    }
-
-    pub fn clear(&mut self) {
-        self.row_extent = 0;
-        self.row_baseline = 0;
-        self.row_tallest = 0;
-    }
-
-    /// Insert a RasterizedGlyph into the texture atlas.
-    pub fn insert(
-        &mut self,
-        glyph: &RasterizedGlyph,
-        active_tex: &mut u32,
-    ) -> Result<Glyph, AtlasInsertError> {
-        if glyph.width > self.width || glyph.height > self.height {
-            return Err(AtlasInsertError::GlyphTooLarge);
-        }
-
-        // If there's not enough room in current row, go onto next one.
-        if !self.room_in_row(glyph) {
-            self.advance_row()?;
-        }
-
-        // If there's still not room, there's nothing that can be done here..
-        if !self.room_in_row(glyph) {
-            return Err(AtlasInsertError::Full);
-        }
-
-        // There appears to be room; load the glyph.
-        Ok(self.insert_inner(glyph, active_tex))
-    }
-
-    /// Insert the glyph without checking for room.
-    ///
-    /// Internal function for use once atlas has been checked for space. GL
-    /// errors could still occur at this point if we were checking for them;
-    /// hence, the Result.
-    fn insert_inner(&mut self, glyph: &RasterizedGlyph, active_tex: &mut u32) -> Glyph {
-        let offset_y = self.row_baseline;
-        let offset_x = self.row_extent;
-        let height = glyph.height as i32;
-        let width = glyph.width as i32;
-        let colored;
-
-        unsafe {
-            gl::BindTexture(gl::TEXTURE_2D, self.id);
-
-            // Load data into OpenGL.
-            let (format, buf) = match &glyph.buf {
-                BitmapBuffer::RGB(buf) => {
-                    colored = false;
-                    (gl::RGB, buf)
-                }
-                BitmapBuffer::RGBA(buf) => {
-                    colored = true;
-                    (gl::RGBA, buf)
-                }
-            };
-
-            gl::TexSubImage2D(
-                gl::TEXTURE_2D,
-                0,
-                offset_x,
-                offset_y,
-                width,
-                height,
-                format,
-                gl::UNSIGNED_BYTE,
-                buf.as_ptr() as *const _,
-            );
-
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-            *active_tex = 0;
-        }
-
-        // Update Atlas state.
-        self.row_extent = offset_x + width;
-        if height > self.row_tallest {
-            self.row_tallest = height;
-        }
-
-        // Generate UV coordinates.
-        let uv_bot = offset_y as f32 / self.height as f32;
-        let uv_left = offset_x as f32 / self.width as f32;
-        let uv_height = height as f32 / self.height as f32;
-        let uv_width = width as f32 / self.width as f32;
-
-        Glyph {
-            tex_id: self.id,
-            colored,
-            top: glyph.top as f32,
-            width: width as f32,
-            height: height as f32,
-            left: glyph.left as f32,
-            uv_bot,
-            uv_left,
-            uv_width,
-            uv_height,
-        }
-    }
-
-    /// Check if there's room in the current row for given glyph.
-    fn room_in_row(&self, raw: &RasterizedGlyph) -> bool {
-        let next_extent = self.row_extent + raw.width as i32;
-        let enough_width = next_extent <= self.width;
-        let enough_height = (raw.height as i32) < (self.height - self.row_baseline);
-
-        enough_width && enough_height
-    }
-
-    /// Mark current row as finished and prepare to insert into the next row.
-    fn advance_row(&mut self) -> Result<(), AtlasInsertError> {
-        let advance_to = self.row_baseline + self.row_tallest;
-        if self.height - advance_to <= 0 {
-            return Err(AtlasInsertError::Full);
-        }
-
-        self.row_baseline = advance_to;
-        self.row_extent = 0;
-        self.row_tallest = 0;
-
-        Ok(())
-    }
-}

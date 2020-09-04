@@ -1,4 +1,4 @@
-use super::atlas::Vec2;
+use super::math::*;
 use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::Delta;
 use crate::config::window::{StartupMode, WindowConfig};
