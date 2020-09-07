@@ -19,21 +19,12 @@ impl Metadata {
 #[derive(Debug)]
 pub struct File {
     path: std::path::PathBuf,
-    sequence: u32,
     metadata: Option<Metadata>,
 }
 
 impl File {
     pub fn new(path: &std::path::Path) -> File {
-        File { path: path.to_path_buf(), sequence: 0, metadata: None }
-    }
-
-    pub fn sequence(&self) -> u32 {
-        self.sequence
-    }
-
-    pub fn path(&self) -> &std::path::Path {
-        &self.path
+        File { path: path.to_path_buf(), metadata: None }
     }
 
     pub fn read_update(&mut self) -> Option<String> {
@@ -46,7 +37,6 @@ impl File {
                         Ok(string) => {
                             eprintln!("Updated {:?}", &self.path);
                             self.metadata = Some(metadata);
-                            self.sequence += 1;
                             return Some(string);
                         }
                         Err(err) => {

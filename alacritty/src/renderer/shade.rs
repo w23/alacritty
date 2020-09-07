@@ -2,7 +2,7 @@ use crate::gl;
 use crate::gl::types::*;
 use alacritty_terminal::term;
 use alacritty_terminal::term::color::Rgb;
-use log::*;
+//use log::*;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -188,6 +188,22 @@ fn get_program_info_log(program: GLuint) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+macro_rules! cptr {
+    ($thing:expr) => {
+        $thing.as_ptr() as *const _
+    };
+}
+
+macro_rules! assert_uniform_valid {
+		($uniform:expr) => {
+				assert!($uniform != gl::INVALID_VALUE as i32);
+				assert!($uniform != gl::INVALID_OPERATION as i32);
+		};
+		( $( $uniform:expr ),* ) => {
+				$( assert_uniform_valid!($uniform); )*
+		};
+}
+
 #[derive(Debug)]
 struct Shader {
     kind: GLuint,
@@ -338,30 +354,40 @@ pub struct ScreenShaderProgram {
     pub u_atlas_dim: GLint,
 }
 
-// Shader paths for live reload.
-static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.f.glsl");
-static TEXT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.v.glsl");
-static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
+// static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.f.glsl");
+// static TEXT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.v.glsl");
 static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
-static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
+static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
+#[cfg(feature = "live-shader-reload")]
 static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
+#[cfg(feature = "live-shader-reload")]
+static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
+#[cfg(feature = "live-shader-reload")]
+static GLYPHRECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.v.glsl");
+#[cfg(feature = "live-shader-reload")]
+static GLYPHRECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.f.glsl");
 
 // Shader source which is used when live-shader-reload feature is disable.
-static TEXT_SHADER_F: &str = include_str!("../../res/text.f.glsl");
-static TEXT_SHADER_V: &str = include_str!("../../res/text.v.glsl");
-static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
+// static TEXT_SHADER_F: &str = include_str!("../../res/text.f.glsl");
+// static TEXT_SHADER_V: &str = include_str!("../../res/text.v.glsl");
 static RECT_SHADER_V: &str = include_str!("../../res/rect.v.glsl");
-static SCREEN_SHADER_F: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
+static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static GLYPHRECT_SHADER_V: &str = include_str!("../../res/glyphrect.v.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static GLYPHRECT_SHADER_F: &str = include_str!("../../res/glyphrect.f.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
 static SCREEN_SHADER_V: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl"));
+#[cfg(not(feature = "live-shader-reload"))]
+static SCREEN_SHADER_F: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
 
 impl ScreenShaderProgram {
     #[cfg(feature = "live-shader-reload")]
     pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let program = ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?;
-        let mut this = Self {
-            program,
+        Ok(Self {
+            program: ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?,
             u_screen_dim: -1,
             u_cell_dim: -1,
             u_glyph_ref: -1,
@@ -371,8 +397,7 @@ impl ScreenShaderProgram {
             u_color_bg: -1,
             u_cursor: -1,
             u_cursor_color: -1,
-        };
-        Ok(this)
+        })
     }
 
     #[cfg(not(feature = "live-shader-reload"))]
@@ -395,22 +420,6 @@ impl ScreenShaderProgram {
     }
 
     fn update(&mut self, validate_uniforms: bool) {
-        macro_rules! cptr {
-            ($thing:expr) => {
-                $thing.as_ptr() as *const _
-            };
-        }
-
-        macro_rules! assert_uniform_valid {
-            ($uniform:expr) => {
-                assert!($uniform != gl::INVALID_VALUE as i32);
-                assert!($uniform != gl::INVALID_OPERATION as i32);
-            };
-            ( $( $uniform:expr ),* ) => {
-                $( assert_uniform_valid!($uniform); )*
-            };
-        }
-
         // get uniform locations
         let (
             screen_dim,
@@ -544,124 +553,166 @@ impl Drop for RectShaderProgram {
     }
 }
 
-/// Text drawing program.
-///
-/// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
 #[derive(Debug)]
-pub struct TextShaderProgram {
-    /// Program id.
-    pub id: GLuint,
-
-    /// Projection scale and offset uniform.
-    u_projection: GLint,
-
-    /// Cell dimensions (pixels).
-    u_cell_dim: GLint,
-
-    /// Background pass flag.
-    ///
-    /// Rendering is split into two passes; 1 for backgrounds, and one for text.
-    u_background: GLint,
+pub struct GlyphRectShaderProgram {
+    pub program: ShaderProgram,
+    pub u_atlas: GLint,
 }
 
-impl TextShaderProgram {
-    pub fn new() -> Result<TextShaderProgram, ShaderCreationError> {
-        let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
-            (None, None)
-        } else {
-            (Some(TEXT_SHADER_V), Some(TEXT_SHADER_F))
-        };
-        let vertex_shader = create_shader(TEXT_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader = create_shader(TEXT_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
-        }
-
-        macro_rules! cptr {
-            ($thing:expr) => {
-                $thing.as_ptr() as *const _
-            };
-        }
-
-        macro_rules! assert_uniform_valid {
-            ($uniform:expr) => {
-                assert!($uniform != gl::INVALID_VALUE as i32);
-                assert!($uniform != gl::INVALID_OPERATION as i32);
-            };
-            ( $( $uniform:expr ),* ) => {
-                $( assert_uniform_valid!($uniform); )*
-            };
-        }
-
-        // get uniform locations
-        let (projection, cell_dim, background) = unsafe {
-            (
-                gl::GetUniformLocation(program, cptr!(b"projection\0")),
-                gl::GetUniformLocation(program, cptr!(b"cellDim\0")),
-                gl::GetUniformLocation(program, cptr!(b"backgroundPass\0")),
-            )
-        };
-
-        assert_uniform_valid!(projection, cell_dim, background);
-
-        let shader = Self {
-            id: program,
-            u_projection: projection,
-            u_cell_dim: cell_dim,
-            u_background: background,
-        };
-
-        unsafe {
-            gl::UseProgram(0);
-        }
-
-        Ok(shader)
+impl GlyphRectShaderProgram {
+    #[cfg(feature = "live-shader-reload")]
+    pub fn new() -> Result<Self, ShaderCreationError> {
+        Ok(Self {
+            program: ShaderProgram::from_files(GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_F_PATH)?,
+            u_atlas: -1,
+        })
     }
 
-    pub fn update_projection(&self, width: f32, height: f32, padding_x: f32, padding_y: f32) {
-        // Bounds check.
-        if (width as u32) < (2 * padding_x as u32) || (height as u32) < (2 * padding_y as u32) {
-            return;
-        }
+    #[cfg(not(feature = "live-shader-reload"))]
+    pub fn new() -> Result<Self, ShaderCreationError> {
+        let mut this = Self {
+            program: ShaderProgram::from_sources(GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F)?,
+            u_atlas: -1,
+        };
 
-        // Compute scale and offset factors, from pixel to ndc space. Y is inverted.
-        //   [0, width - 2 * padding_x] to [-1, 1]
-        //   [height - 2 * padding_y, 0] to [-1, 1]
-        let scale_x = 2. / (width - 2. * padding_x);
-        let scale_y = -2. / (height - 2. * padding_y);
-        let offset_x = -1.;
-        let offset_y = 1.;
-
-        info!("Width: {}, Height: {}", width, height);
-
-        unsafe {
-            gl::Uniform4f(self.u_projection, offset_x, offset_y, scale_x, scale_y);
-        }
+        this.update(true);
+        Ok(this)
     }
 
-    pub fn set_term_uniforms(&self, props: &term::SizeInfo) {
-        unsafe {
-            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
-        }
+    fn update(&mut self, _validate_uniforms: bool) {
+        let atlas = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")) };
+        self.u_atlas = atlas;
     }
 
-    pub fn set_background_pass(&self, background_pass: bool) {
-        let value = if background_pass { 1 } else { 0 };
-
-        unsafe {
-            gl::Uniform1i(self.u_background, value);
+    #[cfg(feature = "live-shader-reload")]
+    pub fn poll(&mut self) -> Result<bool, ShaderCreationError> {
+        if self.program.poll()? {
+            self.update(false);
+            return Ok(true);
         }
+
+        Ok(false)
     }
 }
 
-impl Drop for TextShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
-        }
-    }
-}
+// /// Text drawing program.
+// ///
+// /// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
+// #[derive(Debug)]
+// pub struct TextShaderProgram {
+//     /// Program id.
+//     pub id: GLuint,
+//
+//     /// Projection scale and offset uniform.
+//     u_projection: GLint,
+//
+//     /// Cell dimensions (pixels).
+//     u_cell_dim: GLint,
+//
+//     /// Background pass flag.
+//     ///
+//     /// Rendering is split into two passes; 1 for backgrounds, and one for text.
+//     u_background: GLint,
+// }
+//
+// impl TextShaderProgram {
+//     pub fn new() -> Result<TextShaderProgram, ShaderCreationError> {
+//         let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
+//             (None, None)
+//         } else {
+//             (Some(TEXT_SHADER_V), Some(TEXT_SHADER_F))
+//         };
+//         let vertex_shader = create_shader(TEXT_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
+//         let fragment_shader = create_shader(TEXT_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
+//         let program = create_program(vertex_shader, fragment_shader)?;
+//
+//         unsafe {
+//             gl::DeleteShader(fragment_shader);
+//             gl::DeleteShader(vertex_shader);
+//             gl::UseProgram(program);
+//         }
+//
+//         macro_rules! cptr {
+//             ($thing:expr) => {
+//                 $thing.as_ptr() as *const _
+//             };
+//         }
+//
+//         macro_rules! assert_uniform_valid {
+//             ($uniform:expr) => {
+//                 assert!($uniform != gl::INVALID_VALUE as i32);
+//                 assert!($uniform != gl::INVALID_OPERATION as i32);
+//             };
+//             ( $( $uniform:expr ),* ) => {
+//                 $( assert_uniform_valid!($uniform); )*
+//             };
+//         }
+//
+//         // get uniform locations
+//         let (projection, cell_dim, background) = unsafe {
+//             (
+//                 gl::GetUniformLocation(program, cptr!(b"projection\0")),
+//                 gl::GetUniformLocation(program, cptr!(b"cellDim\0")),
+//                 gl::GetUniformLocation(program, cptr!(b"backgroundPass\0")),
+//             )
+//         };
+//
+//         assert_uniform_valid!(projection, cell_dim, background);
+//
+//         let shader = Self {
+//             id: program,
+//             u_projection: projection,
+//             u_cell_dim: cell_dim,
+//             u_background: background,
+//         };
+//
+//         unsafe {
+//             gl::UseProgram(0);
+//         }
+//
+//         Ok(shader)
+//     }
+//
+//     pub fn update_projection(&self, width: f32, height: f32, padding_x: f32, padding_y: f32) {
+//         // Bounds check.
+//         if (width as u32) < (2 * padding_x as u32) || (height as u32) < (2 * padding_y as u32) {
+//             return;
+//         }
+//
+//         // Compute scale and offset factors, from pixel to ndc space. Y is inverted.
+//         //   [0, width - 2 * padding_x] to [-1, 1]
+//         //   [height - 2 * padding_y, 0] to [-1, 1]
+//         let scale_x = 2. / (width - 2. * padding_x);
+//         let scale_y = -2. / (height - 2. * padding_y);
+//         let offset_x = -1.;
+//         let offset_y = 1.;
+//
+//         info!("Width: {}, Height: {}", width, height);
+//
+//         unsafe {
+//             gl::Uniform4f(self.u_projection, offset_x, offset_y, scale_x, scale_y);
+//         }
+//     }
+//
+//     pub fn set_term_uniforms(&self, props: &term::SizeInfo) {
+//         unsafe {
+//             gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
+//         }
+//     }
+//
+//     pub fn set_background_pass(&self, background_pass: bool) {
+//         let value = if background_pass { 1 } else { 0 };
+//
+//         unsafe {
+//             gl::Uniform1i(self.u_background, value);
+//         }
+//     }
+// }
+//
+// impl Drop for TextShaderProgram {
+//     fn drop(&mut self) {
+//         unsafe {
+//             gl::DeleteProgram(self.id);
+//         }
+//     }
+// }

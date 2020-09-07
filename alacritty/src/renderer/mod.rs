@@ -3,8 +3,8 @@ use shade::*;
 
 mod atlas;
 mod filewatch;
+mod glyphrect;
 mod math;
-mod quad;
 mod shade;
 mod solidrect;
 mod texture;

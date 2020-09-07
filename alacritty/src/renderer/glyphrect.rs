@@ -1,9 +1,11 @@
-use super::rects::RenderRect;
-use super::shade::RectShaderProgram;
+use super::glyph::GeometryFree;
+use super::math::*;
+use super::shade::GlyphRectShaderProgram;
 use crate::gl;
 use crate::gl::types::*;
 use crate::renderer::Error;
 use alacritty_terminal::term::SizeInfo;
+use log::*;
 
 use std::mem::size_of;
 use std::ptr;
@@ -12,13 +14,25 @@ pub enum RectAddError {
     Full,
 }
 
+pub struct GlyphRect {
+    pub pos: Vec2<u16>,
+    pub geom: GeometryFree,
+    pub fg: alacritty_terminal::term::color::Rgb,
+    pub bg: alacritty_terminal::term::color::Rgb,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct Rgba {
+struct Rgb {
     r: u8,
     g: u8,
     b: u8,
-    a: u8,
+}
+
+impl Rgb {
+    fn from(color: alacritty_terminal::term::color::Rgb) -> Rgb {
+        Rgb { r: color.r, g: color.g, b: color.b }
+    }
 }
 
 #[repr(C)]
@@ -26,7 +40,10 @@ struct Rgba {
 struct Vertex {
     x: f32,
     y: f32,
-    color: Rgba,
+    u: f32,
+    v: f32,
+    fg: Rgb,
+    bg: Rgb,
 }
 
 #[derive(Debug)]
@@ -34,7 +51,7 @@ pub struct Rectifier {
     vao: GLuint,
     vbo: GLuint,
     ebo: GLuint,
-    program: RectShaderProgram,
+    program: GlyphRectShaderProgram,
     indices: Vec<u16>,
     vertices: Vec<Vertex>,
     size_info: Option<SizeInfo>,
@@ -56,7 +73,7 @@ impl Rectifier {
             vao,
             vbo,
             ebo,
-            program: RectShaderProgram::new()?,
+            program: GlyphRectShaderProgram::new()?,
             indices: Vec::new(),
             vertices: Vec::new(),
             size_info: None,
@@ -67,39 +84,66 @@ impl Rectifier {
         self.indices.clear();
         self.vertices.clear();
         self.size_info = Some(*size_info);
+
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                }
+                Ok(updated) if updated => {
+                    debug!("updated shader: {:?}", self.program);
+                }
+                _ => {}
+            }
+        }
     }
 
-    pub fn add(&mut self, rect: &RenderRect) -> Result<(), RectAddError> {
+    pub fn add(&mut self, glyph: &GlyphRect) -> Result<(), RectAddError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);
         }
         let index = index as u16;
 
-        if rect.alpha <= 0. {
-            return Ok(());
-        }
-
         let size_info = self.size_info.as_ref().unwrap();
+        let g = glyph.geom;
 
         // Calculate rectangle position.
         let center_x = size_info.width / 2.;
         let center_y = size_info.height / 2.;
-        let x = (rect.x - center_x) / center_x;
-        let y = -(rect.y - center_y) / center_y;
-        let width = rect.width / center_x;
-        let height = rect.height / center_y;
-        let color = Rgba {
-            r: rect.color.r,
-            g: rect.color.g,
-            b: rect.color.b,
-            a: (rect.alpha * 255.) as u8,
-        };
+        let x = (glyph.pos.x as f32 + g.left - center_x) / center_x;
+        let y = -(glyph.pos.y as f32 + (size_info.cell_height - g.top) - center_y) / center_y;
+        let width = g.width / center_x;
+        let height = g.height / center_y;
+        let fg = Rgb::from(glyph.fg);
+        let bg = Rgb::from(glyph.bg);
 
-        self.vertices.push(Vertex { x, y: y + height, color });
-        self.vertices.push(Vertex { x, y, color });
-        self.vertices.push(Vertex { x: x + width, y: y + height, color });
-        self.vertices.push(Vertex { x: x + width, y, color });
+        self.vertices.push(Vertex {
+            x,
+            y: y - height,
+            u: g.uv_left,
+            v: g.uv_bot + g.uv_height,
+            fg,
+            bg,
+        });
+        self.vertices.push(Vertex { x, y, u: g.uv_left, v: g.uv_bot, fg, bg });
+        self.vertices.push(Vertex {
+            x: x + width,
+            y: y - height,
+            u: g.uv_left + g.uv_width,
+            v: g.uv_bot + g.uv_height,
+            fg,
+            bg,
+        });
+        self.vertices.push(Vertex {
+            x: x + width,
+            y,
+            u: g.uv_left + g.uv_width,
+            v: g.uv_bot,
+            fg,
+            bg,
+        });
 
         self.indices.push(index);
         self.indices.push(index + 1);
@@ -121,7 +165,10 @@ impl Rectifier {
         // Swap to rectangle rendering program.
         unsafe {
             // Swap program.
-            gl::UseProgram(self.program.id);
+            gl::UseProgram(self.program.program.id);
+
+            // FIXME expect atlas to be bound at 0
+            gl::Uniform1i(self.program.u_atlas, 0);
 
             // Remove padding from viewport.
             gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
@@ -149,10 +196,10 @@ impl Rectifier {
                 gl::STREAM_DRAW,
             );
 
-            // Position.
+            // Position + uv
             gl::VertexAttribPointer(
                 0,
-                2,
+                4,
                 gl::FLOAT,
                 gl::FALSE,
                 (size_of::<Vertex>()) as _,
@@ -160,16 +207,27 @@ impl Rectifier {
             );
             gl::EnableVertexAttribArray(0);
 
-            // Color
+            // Foreground color
             gl::VertexAttribPointer(
                 1,
-                4,
+                3,
                 gl::UNSIGNED_BYTE,
                 gl::TRUE,
                 (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, color) as *const _,
+                offset_of!(Vertex, fg) as *const _,
             );
             gl::EnableVertexAttribArray(1);
+
+            // Background color
+            gl::VertexAttribPointer(
+                2,
+                3,
+                gl::UNSIGNED_BYTE,
+                gl::TRUE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, bg) as *const _,
+            );
+            gl::EnableVertexAttribArray(2);
 
             gl::DrawElements(
                 gl::TRIANGLES,

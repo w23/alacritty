@@ -5,13 +5,25 @@ use crate::config::window::{StartupMode, WindowConfig};
 use crate::config::Config;
 use crate::gl::types::*;
 use alacritty_terminal::term::CursorKey;
-use crossfont::{
-    FontDesc, FontKey, GlyphKey, Rasterize, RasterizedGlyph, Rasterizer, Size, Slant, Style, Weight,
-};
+use crossfont::{FontDesc, FontKey, Rasterize, Rasterizer, Size, Slant, Style, Weight};
 use fnv::FnvHasher;
 use log::*;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct GlyphKey {
+    pub key: crossfont::GlyphKey,
+    pub wide: bool,
+    pub zero_width: bool,
+}
+
+#[derive(Debug)]
+pub struct RasterizedGlyph {
+    pub rasterized: crossfont::RasterizedGlyph,
+    pub wide: bool,
+    pub zero_width: bool,
+}
 
 /// `LoadGlyph` allows for copying a rasterized glyph into graphics memory.
 pub trait LoadGlyph {
@@ -25,9 +37,13 @@ pub trait LoadGlyph {
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct Glyph {
-    pub tex_id: GLuint,
-    pub colored: bool,
+pub struct GeometryGrid {
+    pub line: u16,
+    pub column: u16,
+}
+
+#[derive(Copy, Debug, Clone)]
+pub struct GeometryFree {
     pub top: f32,
     pub left: f32,
     pub width: f32,
@@ -36,6 +52,19 @@ pub struct Glyph {
     pub uv_left: f32,
     pub uv_width: f32,
     pub uv_height: f32,
+}
+
+#[derive(Copy, Debug, Clone)]
+pub enum Geometry {
+    Grid(GeometryGrid),
+    Free(GeometryFree),
+}
+
+#[derive(Copy, Debug, Clone)]
+pub struct Glyph {
+    pub tex_id: GLuint,
+    pub colored: bool,
+    pub geometry: Geometry,
 }
 
 /// Naïve glyph cache.
@@ -92,7 +121,7 @@ impl GlyphCache {
         // Need to load at least one glyph for the face before calling metrics.
         // The glyph requested here ('m' at the time of writing) has no special
         // meaning.
-        rasterizer.get_glyph(GlyphKey { font_key: regular, c: 'm', size: font.size })?;
+        rasterizer.get_glyph(crossfont::GlyphKey { font_key: regular, c: 'm', size: font.size })?;
 
         let metrics = rasterizer.metrics(regular, font.size)?;
 
@@ -189,13 +218,14 @@ impl GlyphCache {
         glyph_offset: Delta<i8>,
         metrics: &crossfont::Metrics,
     ) -> RasterizedGlyph {
-        let mut rasterized = rasterizer.get_glyph(glyph_key).unwrap_or_else(|_| Default::default());
+        let mut rasterized =
+            rasterizer.get_glyph(glyph_key.key).unwrap_or_else(|_| Default::default());
 
         rasterized.left += i32::from(glyph_offset.x);
         rasterized.top += i32::from(glyph_offset.y);
         rasterized.top -= metrics.descent as i32;
 
-        rasterized
+        RasterizedGlyph { wide: glyph_key.wide, zero_width: glyph_key.zero_width, rasterized }
     }
 
     pub fn get<L>(&mut self, glyph_key: GlyphKey, loader: &mut L) -> &Glyph
@@ -235,7 +265,11 @@ impl GlyphCache {
         let (regular, bold, italic, bold_italic) =
             Self::compute_font_keys(font, &mut self.rasterizer)?;
 
-        self.rasterizer.get_glyph(GlyphKey { font_key: regular, c: 'm', size: font.size })?;
+        self.rasterizer.get_glyph(crossfont::GlyphKey {
+            font_key: regular,
+            c: 'm',
+            size: font.size,
+        })?;
         let metrics = self.rasterizer.metrics(regular, font.size)?;
 
         info!("Font size changed to {:?} with DPR of {}", font.size, dpr);
@@ -272,23 +306,23 @@ impl GlyphCache {
             .flat_map(|font| {
                 (32u8..=126u8)
                     .map(|c| {
-                        let glyph_key = GlyphKey { font_key: *font, c: c as char, size: font_size };
+                        let glyph_key = GlyphKey { wide: false, zero_width: false, key: crossfont::GlyphKey { font_key: *font, c: c as char, size: font_size }};
                         let glyph =
                             Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics);
 
-                        atlas_cell_size.x = std::cmp::max( atlas_cell_size.x, glyph.left + glyph.width);
-                        atlas_cell_size.y = std::cmp::max(atlas_cell_size.y, glyph.top);
+                        atlas_cell_size.x = std::cmp::max( atlas_cell_size.x, glyph.rasterized.left + glyph.rasterized.width);
+                        atlas_cell_size.y = std::cmp::max(atlas_cell_size.y, glyph.rasterized.top);
 
-												atlas_cell_offset.x = std::cmp::max(atlas_cell_offset.x, -glyph.left);
-                        atlas_cell_offset.y = std::cmp::max(atlas_cell_offset.y, glyph.height - glyph.top);
+												atlas_cell_offset.x = std::cmp::max(atlas_cell_offset.x, -glyph.rasterized.left);
+                        atlas_cell_offset.y = std::cmp::max(atlas_cell_offset.y, glyph.rasterized.height - glyph.rasterized.top);
 
                         debug!(
                             "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell={:?} offset={:?}",
-                            glyph.c,
-                            glyph.left,
-                            glyph.top,
-                            glyph.width,
-                            glyph.height,
+                            glyph.rasterized.c,
+                            glyph.rasterized.left,
+                            glyph.rasterized.top,
+                            glyph.rasterized.width,
+                            glyph.rasterized.height,
                             glyph_offset,
                             atlas_cell_size,
                             atlas_cell_offset,
@@ -314,7 +348,7 @@ impl GlyphCache {
         let mut rasterizer = crossfont::Rasterizer::new(dpr as f32, font.use_thin_strokes())?;
         let regular_desc = GlyphCache::make_desc(&font.normal(), Slant::Normal, Weight::Normal);
         let regular = Self::load_regular_font(&mut rasterizer, &regular_desc, font.size)?;
-        rasterizer.get_glyph(GlyphKey { font_key: regular, c: 'm', size: font.size })?;
+        rasterizer.get_glyph(crossfont::GlyphKey { font_key: regular, c: 'm', size: font.size })?;
         rasterizer.metrics(regular, font.size)
     }
 

@@ -6,7 +6,6 @@ use std::ptr;
 pub enum PixelFormat {
     RGBA8,
     RGB8,
-    RGBA32F,
 }
 
 pub struct TextureFormat {
@@ -27,9 +26,6 @@ pub fn get_gl_format(format: PixelFormat) -> TextureFormat {
             format: gl::RGB,
             texel_type: gl::UNSIGNED_BYTE,
         },
-        PixelFormat::RGBA32F => {
-            TextureFormat { internal: gl::RGBA32F as i32, format: gl::RGBA, texel_type: gl::FLOAT }
-        }
     }
 }
 

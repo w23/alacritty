@@ -3,20 +3,24 @@ use std::ptr;
 
 use crate::gl;
 use crate::gl::types::*;
-use crossfont::{BitmapBuffer, RasterizedGlyph};
+use crossfont::BitmapBuffer;
 
+use super::glyph::{Geometry, GeometryFree, GeometryGrid, Glyph, RasterizedGlyph};
 use super::math::*;
 use super::texture::*;
-use super::Glyph;
 
 // TODO figure out dynamically based on GL caps
 static GRID_ATLAS_SIZE: i32 = 1024;
 static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
 
+/// Error that can happen when inserting a texture to the Atlas.
 #[derive(Debug)]
-pub enum AtlasError {
-    TooBig { w: i32, h: i32, cw: i32, ch: i32 },
+pub enum AtlasInsertError {
+    /// Texture atlas is full.
     Full,
+
+    /// The glyph cannot fit within a single texture.
+    GlyphTooLarge,
 }
 
 pub struct CellDims {
@@ -65,11 +69,12 @@ impl GridAtlas {
         CellDims { offset: self.cell_offset, size: self.cell_size }
     }
 
-    pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasError> {
+    pub fn insert(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
         if self.free_line >= self.cell_size.y {
-            return Err(AtlasError::Full);
+            return Err(AtlasInsertError::Full);
         }
 
+        let rasterized = &rasterized.rasterized;
         let line = self.free_line;
         let column = self.free_column;
 
@@ -134,12 +139,7 @@ impl GridAtlas {
                 self.cell_offset,
             );
 
-            // return Err(AtlasError::TooBig {
-            //     w: rasterized.width,
-            //     h: rasterized.height,
-            //     cw: self.cell_width,
-            //     ch: self.cell_height,
-            // });
+            //return Err(AtlasInsertError::GlyphTooLarge);
         }
 
         // FIXME don't do this:
@@ -201,18 +201,12 @@ impl GridAtlas {
             self.free_line += 1;
         }
 
-        // TODO make Glyph enum
+        let line = line as u16;
+        let column = column as u16;
         Ok(Glyph {
             tex_id: self.tex,
             colored,
-            top: 0.0,
-            left: 0.0,
-            width: 0.0,
-            height: 0.0,
-            uv_bot: line as f32,
-            uv_left: column as f32,
-            uv_width: 0.0,
-            uv_height: 0.0,
+            geometry: Geometry::Grid(GeometryGrid { line, column }),
         })
     }
 }
@@ -246,7 +240,7 @@ impl Drop for GridAtlas {
 #[derive(Debug)]
 pub struct Atlas {
     /// Texture id for this atlas.
-    id: GLuint,
+    pub id: GLuint,
 
     /// Width of atlas.
     width: i32,
@@ -269,17 +263,8 @@ pub struct Atlas {
     row_tallest: i32,
 }
 
-/// Error that can happen when inserting a texture to the Atlas.
-enum AtlasInsertError {
-    /// Texture atlas is full.
-    Full,
-
-    /// The glyph cannot fit within a single texture.
-    GlyphTooLarge,
-}
-
 impl Atlas {
-    fn new(size: i32) -> Self {
+    pub fn new(size: i32) -> Self {
         let mut id: GLuint = 0;
         unsafe {
             gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
@@ -317,11 +302,8 @@ impl Atlas {
     }
 
     /// Insert a RasterizedGlyph into the texture atlas.
-    pub fn insert(
-        &mut self,
-        glyph: &RasterizedGlyph,
-        active_tex: &mut u32,
-    ) -> Result<Glyph, AtlasInsertError> {
+    pub fn insert(&mut self, glyph: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
+        let glyph = &glyph.rasterized;
         if glyph.width > self.width || glyph.height > self.height {
             return Err(AtlasInsertError::GlyphTooLarge);
         }
@@ -337,7 +319,7 @@ impl Atlas {
         }
 
         // There appears to be room; load the glyph.
-        Ok(self.insert_inner(glyph, active_tex))
+        Ok(self.insert_inner(glyph))
     }
 
     /// Insert the glyph without checking for room.
@@ -345,7 +327,7 @@ impl Atlas {
     /// Internal function for use once atlas has been checked for space. GL
     /// errors could still occur at this point if we were checking for them;
     /// hence, the Result.
-    fn insert_inner(&mut self, glyph: &RasterizedGlyph, active_tex: &mut u32) -> Glyph {
+    fn insert_inner(&mut self, glyph: &crossfont::RasterizedGlyph) -> Glyph {
         let offset_y = self.row_baseline;
         let offset_x = self.row_extent;
         let height = glyph.height as i32;
@@ -378,9 +360,6 @@ impl Atlas {
                 gl::UNSIGNED_BYTE,
                 buf.as_ptr() as *const _,
             );
-
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-            *active_tex = 0;
         }
 
         // Update Atlas state.
@@ -398,19 +377,21 @@ impl Atlas {
         Glyph {
             tex_id: self.id,
             colored,
-            top: glyph.top as f32,
-            width: width as f32,
-            height: height as f32,
-            left: glyph.left as f32,
-            uv_bot,
-            uv_left,
-            uv_width,
-            uv_height,
+            geometry: Geometry::Free(GeometryFree {
+                top: glyph.top as f32,
+                width: width as f32,
+                height: height as f32,
+                left: glyph.left as f32,
+                uv_bot,
+                uv_left,
+                uv_width,
+                uv_height,
+            }),
         }
     }
 
     /// Check if there's room in the current row for given glyph.
-    fn room_in_row(&self, raw: &RasterizedGlyph) -> bool {
+    fn room_in_row(&self, raw: &crossfont::RasterizedGlyph) -> bool {
         let next_extent = self.row_extent + raw.width as i32;
         let enough_width = next_extent <= self.width;
         let enough_height = (raw.height as i32) < (self.height - self.row_baseline);

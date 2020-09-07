@@ -4,7 +4,7 @@ use {
         config::ui_config::UIConfig,
         gl,
         gl::types::*,
-        renderer::{rects::RenderRect, Error, Glyph, GlyphCache, LoadGlyph},
+        renderer::{rects::RenderRect, Error, GlyphCache, LoadGlyph},
     },
     alacritty_terminal::{
         index::{Column, Line},
@@ -19,11 +19,11 @@ use {
     std::ptr,
 };
 
-use crossfont::{GlyphKey, RasterizedGlyph};
-
 use alacritty_terminal::config::Cursor;
 
-use super::atlas::*;
+use super::atlas::{Atlas, GridAtlas};
+use super::glyph::{Geometry, Glyph, GlyphKey, RasterizedGlyph};
+use super::glyphrect;
 use super::math::*;
 use super::shade::*;
 use super::solidrect;
@@ -39,7 +39,9 @@ struct GlyphRef {
 
 #[derive(Debug)]
 pub struct SimpleRenderer {
-    atlas: Option<GridAtlas>,
+    grid_atlas: Option<GridAtlas>,
+    atlas: Atlas,
+
     screen_glyphs_ref: Vec<GlyphRef>,
     screen_colors_fg: Vec<[u8; 4]>,
     screen_colors_bg: Vec<[u8; 3]>,
@@ -60,6 +62,7 @@ pub struct SimpleRenderer {
     cursor_color: Rgb,
 
     rectifier: solidrect::Rectifier,
+    overglyphs: glyphrect::Rectifier,
 }
 
 impl SimpleRenderer {
@@ -96,7 +99,8 @@ impl SimpleRenderer {
         }
 
         Ok(Self {
-            atlas: None,
+            grid_atlas: None,
+            atlas: Atlas::new(1024 /* FIXME let it decide */),
             screen_glyphs_ref: Vec::new(),
             screen_colors_fg: Vec::new(),
             screen_colors_bg: Vec::new(),
@@ -115,6 +119,7 @@ impl SimpleRenderer {
             cursor_color: Rgb { r: 0, g: 0, b: 0 },
 
             rectifier: solidrect::Rectifier::new()?,
+            overglyphs: glyphrect::Rectifier::new()?,
         })
     }
 
@@ -137,6 +142,7 @@ impl SimpleRenderer {
         cursor_config: Cursor,
         size_info: &'a SizeInfo,
     ) -> RenderContext<'a> {
+        self.overglyphs.begin(size_info);
         RenderContext { this: self, size_info, config, cursor_config }
     }
 
@@ -185,7 +191,7 @@ impl SimpleRenderer {
             }
         }
 
-        let atlas_dims = self.atlas.as_ref().unwrap().cell_dims();
+        let atlas_dims = self.grid_atlas.as_ref().unwrap().cell_dims();
 
         unsafe {
             gl::UseProgram(self.program.program.id);
@@ -219,7 +225,8 @@ impl SimpleRenderer {
                 atlas_dims.size.y as f32,
             );
 
-            gl::BindTexture(gl::TEXTURE_2D, self.atlas.as_ref().unwrap().tex);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.grid_atlas.as_ref().unwrap().tex);
 
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
@@ -287,16 +294,29 @@ impl SimpleRenderer {
 
 impl LoadGlyph for SimpleRenderer {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
-        match self.atlas.as_mut().unwrap().load_glyph(rasterized) {
-            Err(e) => {
-                panic!("{:?}: {}", e, rasterized.c);
+        if !rasterized.wide && !rasterized.zero_width {
+            match self.grid_atlas.as_mut().unwrap().insert(rasterized) {
+                Ok(glyph) => {
+                    return glyph;
+                }
+                Err(e) => {
+                    error!("{:?}: {:?}", e, rasterized);
+                }
             }
-            Ok(glyph) => glyph,
         }
+
+        // FIXME allow errors to be propagated
+        let gl = self.atlas.insert(rasterized).unwrap();
+        debug!(
+            "free {} wide:{} zero_width:{} -> {:?}",
+            rasterized.rasterized.c, rasterized.wide, rasterized.zero_width, gl
+        );
+        gl
     }
 
     fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        self.atlas = Some(GridAtlas::new(cell_size, cell_offset));
+        self.grid_atlas = Some(GridAtlas::new(cell_size, cell_offset));
+        self.atlas.clear();
     }
 }
 
@@ -347,27 +367,41 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn update_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+        let wide = match cell.flags & Flags::WIDE_CHAR {
+            Flags::WIDE_CHAR => true,
+            _ => false,
+        };
         match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
                 let metrics = glyph_cache.metrics;
                 let glyph = glyph_cache.cursor_cache.entry(cursor_key).or_insert_with(|| {
-                    self.load_glyph(&cursor::get_cursor_glyph(
-                        cursor_key.style,
-                        metrics,
-                        self.config.font.offset.x,
-                        self.config.font.offset.y,
-                        cursor_key.is_wide,
-                        self.cursor_config.thickness(),
-                    ))
+                    self.load_glyph(&RasterizedGlyph {
+                        wide,
+                        zero_width: false,
+                        rasterized: cursor::get_cursor_glyph(
+                            cursor_key.style,
+                            metrics,
+                            self.config.font.offset.x,
+                            self.config.font.offset.y,
+                            cursor_key.is_wide,
+                            self.cursor_config.thickness(),
+                        ),
+                    })
                 });
-                self.this.set_cursor(
-                    cell.column.0,
-                    cell.line.0,
-                    glyph.uv_left,
-                    glyph.uv_bot,
-                    cell.fg,
-                );
+
+                match glyph.geometry {
+                    Geometry::Grid(grid) => {
+                        self.this.set_cursor(
+                            cell.column.0,
+                            cell.line.0,
+                            grid.column as f32,
+                            grid.line as f32,
+                            cell.fg,
+                        );
+                    }
+                    _ => {}
+                }
             }
 
             // こんにちは
@@ -392,15 +426,74 @@ impl<'a> RenderContext<'a> {
                     chars[0] = ' ';
                 }
 
-                let wide = match cell.flags & Flags::WIDE_CHAR {
-                    Flags::WIDE_CHAR => true,
-                    _ => false,
-                };
-                let glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, c: chars[0] };
-                let glyph = glyph_cache.get(glyph_key, self);
-
                 let cell_index = cell.line.0 * self.this.columns + cell.column.0;
+                self.this.screen_colors_fg[cell_index] =
+                    [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
+                self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
 
+                self.push_char(
+                    GlyphKey {
+                        wide,
+                        zero_width: false,
+                        key: crossfont::GlyphKey {
+                            font_key,
+                            size: glyph_cache.font_size,
+                            c: chars[0],
+                        },
+                    },
+                    &cell,
+                    glyph_cache,
+                    cell_index,
+                    false,
+                );
+
+                // if wide && cell.column.0 < self.this.columns {
+                //     let cell_index = cell_index + 1;
+                //     self.this.screen_glyphs_ref[cell_index] = GlyphRef {
+                //         x: glyph.uv_left as u8 + 1,
+                //         y: glyph.uv_bot as u8,
+                //         z: glyph.colored as u8,
+                //         w: 0,
+                //     };
+                //     self.this.screen_colors_fg[cell_index] =
+                //         [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
+                //     self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
+                // }
+
+                // Render zero-width characters.
+                for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
+                    self.push_char(
+                        GlyphKey {
+                            wide,
+                            zero_width: true,
+                            key: crossfont::GlyphKey {
+                                font_key,
+                                size: glyph_cache.font_size,
+                                c: *c,
+                            },
+                        },
+                        &cell,
+                        glyph_cache,
+                        cell_index,
+                        true,
+                    );
+                }
+            }
+        };
+    }
+
+    fn push_char(
+        &mut self,
+        glyph_key: GlyphKey,
+        cell: &RenderableCell,
+        glyph_cache: &mut GlyphCache,
+        cell_index: usize,
+        zero_width: bool,
+    ) {
+        let glyph = glyph_cache.get(glyph_key, self);
+
+        match glyph.geometry {
+            Geometry::Grid(grid) => {
                 trace!(
                     "{},{} -> {}: {:?}",
                     cell.line.0,
@@ -411,33 +504,35 @@ impl<'a> RenderContext<'a> {
 
                 // put glyph reference into texture data
                 self.this.screen_glyphs_ref[cell_index] = GlyphRef {
-                    x: glyph.uv_left as u8,
-                    y: glyph.uv_bot as u8,
+                    x: grid.column as u8,
+                    y: grid.line as u8,
                     z: glyph.colored as u8,
                     w: 0,
                 };
-
-                self.this.screen_colors_fg[cell_index] =
-                    [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
-
-                self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
-
-                if wide && cell.column.0 < self.this.columns {
-                    let cell_index = cell_index + 1;
-                    self.this.screen_glyphs_ref[cell_index] = GlyphRef {
-                        x: glyph.uv_left as u8 + 1,
-                        y: glyph.uv_bot as u8,
-                        z: glyph.colored as u8,
-                        w: 0,
-                    };
-                    self.this.screen_colors_fg[cell_index] =
-                        [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
-                    self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
-                }
-
-                // FIXME Render zero-width characters.
             }
-        };
+            Geometry::Free(free) => {
+                self.this.overglyphs.add(&glyphrect::GlyphRect {
+                    pos: Vec2::<u16> {
+                        x: (if zero_width {
+                            // The metrics of zero-width characters are based on rendering
+                            // the character after the current cell, with the anchor at the
+                            // right side of the preceding character. Since we render the
+                            // zero-width characters inside the preceding character, the
+                            // anchor has been moved to the right by one cell.
+                            // FIXME WHY????
+                            1
+                        } else {
+                            0
+                        } + cell.column.0 as u16)
+                            * self.size_info.cell_width as u16,
+                        y: cell.line.0 as u16 * self.size_info.cell_height as u16,
+                    },
+                    geom: free,
+                    fg: cell.fg,
+                    bg: cell.bg, // FIXME don't really need it: have it set for cell already
+                });
+            }
+        }
     }
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
@@ -452,6 +547,11 @@ impl<'a> RenderContext<'a> {
 
     pub fn draw_grid_text(&mut self) {
         self.this.paint(self.size_info);
+        unsafe {
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.this.atlas.id);
+        }
+        self.this.overglyphs.draw();
     }
 }
 
