@@ -15,10 +15,10 @@ pub enum RectAddError {
 }
 
 pub struct GlyphRect {
-    pub pos: Vec2<u16>,
+    pub pos: Vec2<i16>,
     pub geom: GeometryFree,
     pub fg: alacritty_terminal::term::color::Rgb,
-    pub bg: alacritty_terminal::term::color::Rgb,
+    pub colored: bool,
 }
 
 #[repr(C)]
@@ -38,12 +38,12 @@ impl Rgb {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
-    x: f32,
-    y: f32,
+    x: i16,
+    y: i16,
     u: f32,
     v: f32,
     fg: Rgb,
-    bg: Rgb,
+    flags: u8,
 }
 
 #[derive(Debug)]
@@ -110,39 +110,37 @@ impl Rectifier {
         let g = glyph.geom;
 
         // Calculate rectangle position.
-        let center_x = size_info.width / 2.;
-        let center_y = size_info.height / 2.;
-        let x = (glyph.pos.x as f32 + g.left - center_x) / center_x;
-        let y = -(glyph.pos.y as f32 + (size_info.cell_height - g.top) - center_y) / center_y;
-        let width = g.width / center_x;
-        let height = g.height / center_y;
+        let x = glyph.pos.x + g.left;
+        let y = size_info.height as i16 - (glyph.pos.y + size_info.cell_height as i16 - g.top);
         let fg = Rgb::from(glyph.fg);
-        let bg = Rgb::from(glyph.bg);
+        let flags = if glyph.colored { 1 } else { 0 };
+
+        eprintln!("{}, {}", x, y);
 
         self.vertices.push(Vertex {
             x,
-            y: y - height,
+            y: y - g.height,
             u: g.uv_left,
             v: g.uv_bot + g.uv_height,
             fg,
-            bg,
+            flags,
         });
-        self.vertices.push(Vertex { x, y, u: g.uv_left, v: g.uv_bot, fg, bg });
+        self.vertices.push(Vertex { x, y, u: g.uv_left, v: g.uv_bot, fg, flags });
         self.vertices.push(Vertex {
-            x: x + width,
-            y: y - height,
+            x: x + g.width,
+            y: y - g.height,
             u: g.uv_left + g.uv_width,
             v: g.uv_bot + g.uv_height,
             fg,
-            bg,
+            flags,
         });
         self.vertices.push(Vertex {
-            x: x + width,
+            x: x + g.width,
             y,
             u: g.uv_left + g.uv_width,
             v: g.uv_bot,
             fg,
-            bg,
+            flags,
         });
 
         self.indices.push(index);
@@ -169,6 +167,7 @@ impl Rectifier {
 
             // FIXME expect atlas to be bound at 0
             gl::Uniform1i(self.program.u_atlas, 0);
+            gl::Uniform2f(self.program.u_resolution, size_info.width, size_info.height);
 
             // Remove padding from viewport.
             gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
@@ -196,38 +195,49 @@ impl Rectifier {
                 gl::STREAM_DRAW,
             );
 
-            // Position + uv
+            // Position
             gl::VertexAttribPointer(
                 0,
-                4,
-                gl::FLOAT,
+                2,
+                gl::SHORT,
                 gl::FALSE,
                 (size_of::<Vertex>()) as _,
                 ptr::null(),
             );
             gl::EnableVertexAttribArray(0);
 
-            // Foreground color
+            // uv
             gl::VertexAttribPointer(
                 1,
-                3,
-                gl::UNSIGNED_BYTE,
-                gl::TRUE,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
                 (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, fg) as *const _,
+                offset_of!(Vertex, u) as *const _,
             );
             gl::EnableVertexAttribArray(1);
 
-            // Background color
+            // Foreground color
             gl::VertexAttribPointer(
                 2,
                 3,
                 gl::UNSIGNED_BYTE,
                 gl::TRUE,
                 (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, bg) as *const _,
+                offset_of!(Vertex, fg) as *const _,
             );
             gl::EnableVertexAttribArray(2);
+
+            // Flags
+            gl::VertexAttribPointer(
+                3,
+                1,
+                gl::UNSIGNED_BYTE,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, flags) as *const _,
+            );
+            gl::EnableVertexAttribArray(3);
 
             gl::DrawElements(
                 gl::TRIANGLES,

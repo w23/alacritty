@@ -17,7 +17,8 @@ precision mediump float;
 uniform sampler2D atlas;
 
 smooth in vec2 uv;
-flat in vec3 fg, bg;
+flat in vec3 fg;
+flat in float flags;
 
 out vec4 FragColor;
 
@@ -31,9 +32,14 @@ void main()
 	// 	return mix(bg, fg.rgb, mask.rgb);
 
 		// FIXME pass colored bit
-		bool colored = false;
+		bool colored = flags > 0.;
 		if (colored) {
-			FragColor = mask;
+			if (mask.a > 0.) {
+				mask.rgb /= mask.a;
+				FragColor = mask;
+			} else {
+				//FragColor = vec4(0., .5, .5, 1.);
+			}
 		} else {
 			FragColor = vec4(fg, mask.r);
 		}

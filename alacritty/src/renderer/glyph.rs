@@ -44,10 +44,10 @@ pub struct GeometryGrid {
 
 #[derive(Copy, Debug, Clone)]
 pub struct GeometryFree {
-    pub top: f32,
-    pub left: f32,
-    pub width: f32,
-    pub height: f32,
+    pub top: i16,
+    pub left: i16,
+    pub width: i16,
+    pub height: i16,
     pub uv_bot: f32,
     pub uv_left: f32,
     pub uv_width: f32,

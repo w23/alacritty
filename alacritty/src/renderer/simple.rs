@@ -371,6 +371,7 @@ impl<'a> RenderContext<'a> {
             Flags::WIDE_CHAR => true,
             _ => false,
         };
+
         match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup.
@@ -400,6 +401,8 @@ impl<'a> RenderContext<'a> {
                             cell.fg,
                         );
                     }
+
+                    // FIXME how to draw this cursor
                     _ => {}
                 }
             }
@@ -512,7 +515,7 @@ impl<'a> RenderContext<'a> {
             }
             Geometry::Free(free) => {
                 self.this.overglyphs.add(&glyphrect::GlyphRect {
-                    pos: Vec2::<u16> {
+                    pos: Vec2::<i16> {
                         x: (if zero_width {
                             // The metrics of zero-width characters are based on rendering
                             // the character after the current cell, with the anchor at the
@@ -523,13 +526,13 @@ impl<'a> RenderContext<'a> {
                             1
                         } else {
                             0
-                        } + cell.column.0 as u16)
-                            * self.size_info.cell_width as u16,
-                        y: cell.line.0 as u16 * self.size_info.cell_height as u16,
+                        } + cell.column.0 as i16)
+                            * self.size_info.cell_width as i16,
+                        y: cell.line.0 as i16 * self.size_info.cell_height as i16,
                     },
                     geom: free,
                     fg: cell.fg,
-                    bg: cell.bg, // FIXME don't really need it: have it set for cell already
+                    colored: glyph.colored,
                 });
             }
         }
