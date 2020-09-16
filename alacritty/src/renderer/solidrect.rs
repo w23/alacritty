@@ -96,10 +96,10 @@ impl Rectifier {
             a: (rect.alpha * 255.) as u8,
         };
 
-        self.vertices.push(Vertex { x, y: y + height, color });
         self.vertices.push(Vertex { x, y, color });
-        self.vertices.push(Vertex { x: x + width, y: y + height, color });
+        self.vertices.push(Vertex { x, y: y - height, color });
         self.vertices.push(Vertex { x: x + width, y, color });
+        self.vertices.push(Vertex { x: x + width, y: y - height, color });
 
         self.indices.push(index);
         self.indices.push(index + 1);
