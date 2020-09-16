@@ -111,15 +111,13 @@ impl Rectifier {
 
         // Calculate rectangle position.
         let x = glyph.pos.x + g.left;
-        let y = size_info.height as i16 - (glyph.pos.y + size_info.cell_height as i16 - g.top);
+        let y = glyph.pos.y + (size_info.cell_height as i16 - g.top);
         let fg = Rgb::from(glyph.fg);
         let flags = if glyph.colored { 1 } else { 0 };
 
-        eprintln!("{}, {}", x, y);
-
         self.vertices.push(Vertex {
             x,
-            y: y - g.height,
+            y: y + g.height,
             u: g.uv_left,
             v: g.uv_bot + g.uv_height,
             fg,
@@ -128,7 +126,7 @@ impl Rectifier {
         self.vertices.push(Vertex { x, y, u: g.uv_left, v: g.uv_bot, fg, flags });
         self.vertices.push(Vertex {
             x: x + g.width,
-            y: y - g.height,
+            y: y + g.height,
             u: g.uv_left + g.uv_width,
             v: g.uv_bot + g.uv_height,
             fg,
@@ -162,15 +160,19 @@ impl Rectifier {
 
         // Swap to rectangle rendering program.
         unsafe {
+            // Add padding to viewport
+            let pad_x = size_info.padding_x as i32;
+            let pad_y = size_info.padding_y as i32;
+            let width = size_info.width as i32 - 2 * pad_x;
+            let height = size_info.height as i32 - 2 * pad_y;
+            gl::Viewport(pad_x, pad_y, width, height);
+
             // Swap program.
             gl::UseProgram(self.program.program.id);
 
             // FIXME expect atlas to be bound at 0
             gl::Uniform1i(self.program.u_atlas, 0);
-            gl::Uniform2f(self.program.u_resolution, size_info.width, size_info.height);
-
-            // Remove padding from viewport.
-            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
+            gl::Uniform2f(self.program.u_scale, 2.0 / width as f32, -2.0 / height as f32);
 
             // Change blending strategy.
             gl::Enable(gl::BLEND);
@@ -255,6 +257,7 @@ impl Rectifier {
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
+            // FIXME ??? track viewport wrt padding properly everywhere
             let padding_x = size_info.padding_x as i32;
             let padding_y = size_info.padding_y as i32;
             let width = size_info.width as i32;

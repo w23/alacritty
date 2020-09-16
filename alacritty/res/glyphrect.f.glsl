@@ -22,23 +22,14 @@ flat in float flags;
 
 out vec4 FragColor;
 
-void main()
-{
+void main() {
+		FragColor = vec4(0.);
 		vec4 mask = texture(atlas, uv);
-
-	// if (colored)
-	// 	return mix(bg, mask.rgb, mask.a);
-	// else
-	// 	return mix(bg, fg.rgb, mask.rgb);
-
-		// FIXME pass colored bit
 		bool colored = flags > 0.;
 		if (colored) {
 			if (mask.a > 0.) {
 				mask.rgb /= mask.a;
 				FragColor = mask;
-			} else {
-				//FragColor = vec4(0., .5, .5, 1.);
 			}
 		} else {
 			FragColor = vec4(fg, mask.r);

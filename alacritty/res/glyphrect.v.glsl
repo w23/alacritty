@@ -21,12 +21,13 @@ smooth out vec2 uv;
 flat out vec3 fg;
 flat out float flags;
 
-uniform vec2 resolution;
+uniform vec2 uScale;
 
 void main()
 {
     uv = aUv;
     fg = aFg;
 		flags = aFlags;
-    gl_Position = vec4(aPos.xy * 2. / resolution - 1., 0.0, 1.0);
+		vec2 pos = vec2(-1., 1.) + aPos.xy * uScale;
+    gl_Position = vec4(pos, 0.0, 1.0);
 }

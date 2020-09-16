@@ -557,7 +557,7 @@ impl Drop for RectShaderProgram {
 pub struct GlyphRectShaderProgram {
     pub program: ShaderProgram,
     pub u_atlas: GLint,
-    pub u_resolution: GLint,
+    pub u_scale: GLint,
 }
 
 impl GlyphRectShaderProgram {
@@ -566,7 +566,7 @@ impl GlyphRectShaderProgram {
         Ok(Self {
             program: ShaderProgram::from_files(GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_F_PATH)?,
             u_atlas: -1,
-            u_resolution: -1,
+            u_scale: -1,
         })
     }
 
@@ -575,7 +575,7 @@ impl GlyphRectShaderProgram {
         let mut this = Self {
             program: ShaderProgram::from_sources(GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F)?,
             u_atlas: -1,
-            u_resolution: -1,
+            u_scale: -1,
         };
 
         this.update(true);
@@ -586,8 +586,8 @@ impl GlyphRectShaderProgram {
         let atlas = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")) };
         self.u_atlas = atlas;
 
-        let resolution = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"resolution\0")) };
-        self.u_resolution = resolution;
+        let scale = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"uScale\0")) };
+        self.u_scale = scale;
     }
 
     #[cfg(feature = "live-shader-reload")]
