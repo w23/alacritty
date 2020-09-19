@@ -12,16 +12,16 @@ uniform vec4 atlas_dim; // .xy = offset, .zw = cell_size
 uniform vec4 cursor;
 uniform vec3 cursor_color;
 
-vec3 drawGlyph(vec4 glyph, vec2 cell_pix, vec3 bg, vec3 fg) {
+vec4 drawGlyph(vec4 glyph, vec2 cell_pix, vec3 bg, vec3 fg) {
 	vec2 atlas_pix = glyph.xy * atlas_dim.zw + atlas_dim.xy + cell_pix;
 	vec4 mask = texture(atlas, atlas_pix / vec2(textureSize(atlas, 0)));
 
 	//return mask.rgb;
 
-	if (glyph.z > 0.)
-		return mix(bg, mask.rgb, mask.a);
-	else
-		return mix(bg, fg.rgb, mask.rgb);
+	if (glyph.z > 0.) {
+		return vec4(mix(bg, mask.rgb, mask.a), mask.a);
+	} else
+		return vec4(mix(bg, fg.rgb, mask.rgb), mask.r);
 }
 
 void main() {
@@ -44,20 +44,25 @@ void main() {
 	vec3 fg = texture(color_fg, tuv).rgb;
 	vec3 bg = texture(color_bg, tuv).rgb;
 
+	if (glyph.xy == vec2(0.)) {
+		discard;
+		return;
+	}
+
 	color = vec4(bg, 1.);
 
 	vec2 cell_pix = mod(uv, cell_dim);
 	if (cell == cursor.xy)
-		color = vec4(drawGlyph(vec4(cursor.zw, 0., 0.), cell_pix, color.rgb, cursor_color), 1.);
-
-	color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix, color.rgb, fg.rgb), 1.);
+		color = drawGlyph(vec4(cursor.zw, 0., 0.), cell_pix, color.rgb, cursor_color);
+	color = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix, color.rgb, fg.rgb);
 
 	if (cell_pix.y > (cell_dim.y - atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
 		vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells;
 		vec4 glyph = texture(glyph_ref, tuv);
 		vec3 fg = texture(color_fg, tuv).rgb;
 		vec3 bg = texture(color_bg, tuv).rgb;
-		color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -cell_dim.y), color.rgb, fg.rgb), 1.);
+		vec4 c = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -cell_dim.y), color.rgb, fg.rgb);
+		color = mix(color, c, c.a);
 		//color.g = 1.;
 	}
 
@@ -66,8 +71,9 @@ void main() {
 		vec4 glyph = texture(glyph_ref, tuv);
 		vec3 fg = texture(color_fg, tuv).rgb;
 		vec3 bg = texture(color_bg, tuv).rgb;
-		color = vec4(drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(cell_dim.x, 0.), color.rgb, fg.rgb), 1.);
+		vec4 c = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(cell_dim.x, 0.), color.rgb, fg.rgb);
 		//color.b = 1.;
+		color = mix(color, c, c.a);
 	}
 
 	// TODO:
@@ -93,9 +99,9 @@ void main() {
 	{
 		color = vec4(0., 0., 0., 1.);
 		vec2 cp = mod(uv, atlas_dim.zw);
-		color.rg = fract(uv / atlas_dim.zw);
+		//color.rg = fract(uv / atlas_dim.zw);
 		color.rgb += texture(atlas, uv / vec2(textureSize(atlas, 0))).rgb;
-		color.b += step(cp.y, atlas_dim.y);
+		//color.b += step(cp.y, atlas_dim.y);
 		//color.b += step(cp.y, 15.);
 		//color = mix(color, vec4(, 1.), 1.);
 	}

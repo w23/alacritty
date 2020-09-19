@@ -1,4 +1,4 @@
-use super::glyph::GeometryFree;
+use super::glyph::AtlasRefFree;
 use super::math::*;
 use super::shade::GlyphRectShaderProgram;
 use crate::gl;
@@ -16,7 +16,7 @@ pub enum RectAddError {
 
 pub struct GlyphRect {
     pub pos: Vec2<i16>,
-    pub geom: GeometryFree,
+    pub geom: AtlasRefFree,
     pub fg: alacritty_terminal::term::color::Rgb,
     pub colored: bool,
 }

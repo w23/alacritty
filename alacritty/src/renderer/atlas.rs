@@ -5,11 +5,11 @@ use crate::gl;
 use crate::gl::types::*;
 use crossfont::BitmapBuffer;
 
-use super::glyph::{Geometry, GeometryFree, GeometryGrid, Glyph, RasterizedGlyph};
+use super::glyph::{AtlasRef, AtlasRefFree, AtlasRefGrid, Glyph, RasterizedGlyph};
 use super::math::*;
 use super::texture::*;
 
-// TODO figure out dynamically based on GL caps
+// TODO figure out dynamically based on GL caps (?)
 static GRID_ATLAS_SIZE: i32 = 1024;
 static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
 
@@ -31,6 +31,7 @@ pub struct CellDims {
 #[derive(Debug)]
 pub struct GridAtlas {
     pub tex: GLuint,
+    index: usize,
     cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
     grid_size: Vec2<i32>,
@@ -40,7 +41,7 @@ pub struct GridAtlas {
 }
 
 impl GridAtlas {
-    pub fn new(cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
+    pub fn new(index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
         // FIXME limit atlas size by 256x256 cells
 
         // FIXME add guard padding back
@@ -53,6 +54,7 @@ impl GridAtlas {
         debug!("atlas padding: {:?}", padding);
 
         let ret = Self {
+            index,
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
             cell_size: atlas_cell_size,
             cell_offset,
@@ -128,7 +130,7 @@ impl GridAtlas {
             || off_x + rasterized.width > self.cell_size.x
             || off_y + rasterized.height > self.cell_size.y
         {
-            error!(
+            trace!(
                 "FIXME: glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
                 rasterized.c,
                 rasterized.left,
@@ -139,7 +141,7 @@ impl GridAtlas {
                 self.cell_offset,
             );
 
-            //return Err(AtlasInsertError::GlyphTooLarge);
+            return Err(AtlasInsertError::GlyphTooLarge);
         }
 
         // FIXME don't do this:
@@ -204,9 +206,9 @@ impl GridAtlas {
         let line = line as u16;
         let column = column as u16;
         Ok(Glyph {
-            tex_id: self.tex,
+            atlas_index: self.index,
             colored,
-            geometry: Geometry::Grid(GeometryGrid { line, column }),
+            atlas_ref: AtlasRef::Grid(AtlasRefGrid { line, column }),
         })
     }
 }
@@ -242,6 +244,9 @@ pub struct Atlas {
     /// Texture id for this atlas.
     pub id: GLuint,
 
+    /// This atlas index
+    index: usize,
+
     /// Width of atlas.
     width: i32,
 
@@ -264,7 +269,7 @@ pub struct Atlas {
 }
 
 impl Atlas {
-    pub fn new(size: i32) -> Self {
+    pub fn new(index: usize, size: i32) -> Self {
         let mut id: GLuint = 0;
         unsafe {
             gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
@@ -292,7 +297,15 @@ impl Atlas {
             gl::BindTexture(gl::TEXTURE_2D, 0);
         }
 
-        Self { id, width: size, height: size, row_extent: 0, row_baseline: 0, row_tallest: 0 }
+        Self {
+            id,
+            index,
+            width: size,
+            height: size,
+            row_extent: 0,
+            row_baseline: 0,
+            row_tallest: 0,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -375,9 +388,9 @@ impl Atlas {
         let uv_width = width as f32 / self.width as f32;
 
         Glyph {
-            tex_id: self.id,
+            atlas_index: self.index,
             colored,
-            geometry: Geometry::Free(GeometryFree {
+            atlas_ref: AtlasRef::Free(AtlasRefFree {
                 top: glyph.top as i16,
                 width: width as i16,
                 height: height as i16,

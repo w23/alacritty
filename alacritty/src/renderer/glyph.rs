@@ -37,13 +37,13 @@ pub trait LoadGlyph {
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct GeometryGrid {
+pub struct AtlasRefGrid {
     pub line: u16,
     pub column: u16,
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct GeometryFree {
+pub struct AtlasRefFree {
     pub top: i16,
     pub left: i16,
     pub width: i16,
@@ -55,16 +55,16 @@ pub struct GeometryFree {
 }
 
 #[derive(Copy, Debug, Clone)]
-pub enum Geometry {
-    Grid(GeometryGrid),
-    Free(GeometryFree),
+pub enum AtlasRef {
+    Grid(AtlasRefGrid),
+    Free(AtlasRefFree),
 }
 
 #[derive(Copy, Debug, Clone)]
 pub struct Glyph {
-    pub tex_id: GLuint,
+    pub atlas_index: usize,
+    pub atlas_ref: AtlasRef,
     pub colored: bool,
-    pub geometry: Geometry,
 }
 
 /// Naïve glyph cache.

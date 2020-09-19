@@ -21,8 +21,8 @@ use {
 
 use alacritty_terminal::config::Cursor;
 
-use super::atlas::{Atlas, GridAtlas};
-use super::glyph::{Geometry, Glyph, GlyphKey, RasterizedGlyph};
+use super::atlas::{Atlas, AtlasInsertError, GridAtlas};
+use super::glyph::{AtlasRef, Glyph, GlyphKey, RasterizedGlyph};
 use super::glyphrect;
 use super::math::*;
 use super::shade::*;
@@ -38,11 +38,54 @@ struct GlyphRef {
 }
 
 #[derive(Debug)]
-pub struct SimpleRenderer {
-    grid_atlas: Option<GridAtlas>,
-    atlas: Atlas,
+struct Grid {
+    atlas: GridAtlas,
+    glyphs: Vec<GlyphRef>,
+}
 
-    screen_glyphs_ref: Vec<GlyphRef>,
+impl Grid {
+    fn new(
+        index: usize,
+        columns: usize,
+        lines: usize,
+        cell_size: Vec2<i32>,
+        cell_offset: Vec2<i32>,
+    ) -> Self {
+        let cells = columns * lines;
+        Self {
+            atlas: GridAtlas::new(index, cell_size, cell_offset),
+            glyphs: vec![GlyphRef { x: 0, y: 0, z: 0, w: 0 }; cells],
+        }
+    }
+
+    fn resize(&mut self, columns: usize, lines: usize) {
+        let cells = columns * lines;
+        self.glyphs.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
+    }
+
+    fn clear_atlas(&mut self, index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        self.atlas = GridAtlas::new(index, cell_size, cell_offset);
+        self.glyphs.clear();
+    }
+
+    fn clear_grid(&mut self) {
+        self.glyphs.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
+    }
+}
+
+#[derive(Debug)]
+struct QuadGlyph {
+    atlas: Atlas,
+    batches: Vec<glyphrect::Rectifier>,
+}
+
+#[derive(Debug)]
+pub struct SimpleRenderer {
+    grids: Vec<Grid>,
+
+    cell_size: Vec2<i32>,
+    cell_offset: Vec2<i32>,
+
     screen_colors_fg: Vec<[u8; 4]>,
     screen_colors_bg: Vec<[u8; 3]>,
 
@@ -61,8 +104,11 @@ pub struct SimpleRenderer {
     cursor_glyph: [f32; 2],
     cursor_color: Rgb,
 
-    rectifier: solidrect::Rectifier,
+    //atlas: Vec<Atlas>,
+    atlas: Atlas,
     overglyphs: glyphrect::Rectifier,
+
+    rectifier: solidrect::Rectifier,
 }
 
 impl SimpleRenderer {
@@ -99,9 +145,11 @@ impl SimpleRenderer {
         }
 
         Ok(Self {
-            grid_atlas: None,
-            atlas: Atlas::new(1024 /* FIXME let it decide */),
-            screen_glyphs_ref: Vec::new(),
+            grids: Vec::new(),
+
+            cell_size: Vec2 { x: 0, y: 0 },
+            cell_offset: Vec2 { x: 0, y: 0 },
+
             screen_colors_fg: Vec::new(),
             screen_colors_bg: Vec::new(),
 
@@ -118,8 +166,10 @@ impl SimpleRenderer {
             cursor_glyph: [-1.0; 2],
             cursor_color: Rgb { r: 0, g: 0, b: 0 },
 
-            rectifier: solidrect::Rectifier::new()?,
+            atlas: Atlas::new(0, 1024),
             overglyphs: glyphrect::Rectifier::new()?,
+
+            rectifier: solidrect::Rectifier::new()?,
         })
     }
 
@@ -174,7 +224,10 @@ impl SimpleRenderer {
 
         self.screen_colors_bg.resize(cells, [0u8; 3]);
         self.screen_colors_fg.resize(cells, [0u8; 4]);
-        self.screen_glyphs_ref.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
+
+        for grid in &mut self.grids {
+            grid.resize(self.columns, self.lines);
+        }
     }
 
     fn paint(&mut self, size_info: &SizeInfo) {
@@ -190,8 +243,6 @@ impl SimpleRenderer {
                 _ => {}
             }
         }
-
-        let atlas_dims = self.grid_atlas.as_ref().unwrap().cell_dims();
 
         unsafe {
             gl::UseProgram(self.program.program.id);
@@ -213,28 +264,6 @@ impl SimpleRenderer {
                 self.cursor_color.r as f32 / 255.,
                 self.cursor_color.g as f32 / 255.,
                 self.cursor_color.b as f32 / 255.,
-            );
-
-            gl::Uniform4f(
-                self.program.u_atlas_dim,
-                atlas_dims.offset.x as f32,
-                //atlas_dims.offset.y as f32,
-                // Offset needs to be relative to "top" inverted-y OpenGL texture coords
-                (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
-                atlas_dims.size.x as f32,
-                atlas_dims.size.y as f32,
-            );
-
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D, self.grid_atlas.as_ref().unwrap().tex);
-
-            gl::ActiveTexture(gl::TEXTURE1);
-            gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
-            upload_texture(
-                self.columns as i32,
-                self.lines as i32,
-                PixelFormat::RGBA8,
-                self.screen_glyphs_ref.as_ptr() as *const _,
             );
 
             gl::ActiveTexture(gl::TEXTURE2);
@@ -259,8 +288,39 @@ impl SimpleRenderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
             gl::EnableVertexAttribArray(0);
+        }
 
-            gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+        debug!("Grids: {}", self.grids.len());
+
+        for grid in &self.grids {
+            let atlas_dims = grid.atlas.cell_dims();
+            unsafe {
+                gl::Uniform4f(
+                    self.program.u_atlas_dim,
+                    atlas_dims.offset.x as f32,
+                    //atlas_dims.offset.y as f32,
+                    // Offset needs to be relative to "top" inverted-y OpenGL texture coords
+                    (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
+                    atlas_dims.size.x as f32,
+                    atlas_dims.size.y as f32,
+                );
+
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, grid.atlas.tex);
+
+                gl::ActiveTexture(gl::TEXTURE1);
+                gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
+                upload_texture(
+                    self.columns as i32,
+                    self.lines as i32,
+                    PixelFormat::RGBA8,
+                    grid.glyphs.as_ptr() as *const _,
+                );
+                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+            }
+        }
+
+        unsafe {
             gl::DisableVertexAttribArray(0);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindVertexArray(0);
@@ -268,7 +328,10 @@ impl SimpleRenderer {
     }
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
-        self.screen_glyphs_ref.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
+        for grid in &mut self.grids {
+            grid.clear_grid();
+        }
+
         self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
         self.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
 
@@ -295,12 +358,38 @@ impl SimpleRenderer {
 impl LoadGlyph for SimpleRenderer {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
         if !rasterized.wide && !rasterized.zero_width {
-            match self.grid_atlas.as_mut().unwrap().insert(rasterized) {
-                Ok(glyph) => {
-                    return glyph;
-                }
-                Err(e) => {
-                    error!("{:?}: {:?}", e, rasterized);
+            if self.grids.is_empty() {
+                self.grids.push(Grid::new(
+                    0,
+                    self.columns,
+                    self.lines,
+                    self.cell_size,
+                    self.cell_offset,
+                ));
+            }
+            loop {
+                match self.grids.last_mut().unwrap().atlas.insert(rasterized) {
+                    Ok(glyph) => {
+                        return glyph;
+                    }
+                    Err(AtlasInsertError::GlyphTooLarge) => {
+                        trace!(
+                            "Glyph is too large for grid atlas, will render it using quads: {:?}",
+                            rasterized
+                        );
+                        break;
+                    }
+                    Err(AtlasInsertError::Full) => {
+                        debug!("GridAtlas is full, creating a new one");
+                        let index = self.grids.len();
+                        self.grids.push(Grid::new(
+                            index,
+                            self.columns,
+                            self.lines,
+                            self.cell_size,
+                            self.cell_offset,
+                        ));
+                    }
                 }
             }
         }
@@ -315,8 +404,13 @@ impl LoadGlyph for SimpleRenderer {
     }
 
     fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        self.grid_atlas = Some(GridAtlas::new(cell_size, cell_offset));
+        self.cell_size = cell_size;
+        self.cell_offset = cell_offset;
         self.atlas.clear();
+
+        for (index, grid) in &mut self.grids.iter_mut().enumerate() {
+            grid.clear_atlas(index, cell_size, cell_offset);
+        }
     }
 }
 
@@ -391,8 +485,8 @@ impl<'a> RenderContext<'a> {
                     })
                 });
 
-                match glyph.geometry {
-                    Geometry::Grid(grid) => {
+                match glyph.atlas_ref {
+                    AtlasRef::Grid(grid) => {
                         self.this.set_cursor(
                             cell.column.0,
                             cell.line.0,
@@ -495,25 +589,25 @@ impl<'a> RenderContext<'a> {
     ) {
         let glyph = glyph_cache.get(glyph_key, self);
 
-        match glyph.geometry {
-            Geometry::Grid(grid) => {
-                trace!(
-                    "{},{} -> {}: {:?}",
-                    cell.line.0,
-                    cell.column.0,
-                    cell_index,
-                    self.this.screen_glyphs_ref[cell_index]
-                );
+        match glyph.atlas_ref {
+            AtlasRef::Grid(grid) => {
+                // trace!(
+                //     "{},{} -> {}: {:?}",
+                //     cell.line.0,
+                //     cell.column.0,
+                //     cell_index,
+                //     self.this.screen_glyphs_ref[cell_index]
+                // );
 
                 // put glyph reference into texture data
-                self.this.screen_glyphs_ref[cell_index] = GlyphRef {
+                self.this.grids[glyph.atlas_index as usize].glyphs[cell_index] = GlyphRef {
                     x: grid.column as u8,
                     y: grid.line as u8,
                     z: glyph.colored as u8,
                     w: 0,
                 };
             }
-            Geometry::Free(free) => {
+            AtlasRef::Free(free) => {
                 self.this.overglyphs.add(&glyphrect::GlyphRect {
                     pos: Vec2::<i16> {
                         x: (if zero_width {
