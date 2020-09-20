@@ -29,7 +29,7 @@ pub fn get_gl_format(format: PixelFormat) -> TextureFormat {
     }
 }
 
-pub unsafe fn upload_texture(width: i32, height: i32, format: PixelFormat, ptr: *const f32) {
+pub unsafe fn upload_texture(width: i32, height: i32, format: PixelFormat, ptr: *const libc::c_void) {
     let format = get_gl_format(format);
     gl::TexImage2D(
         gl::TEXTURE_2D,
@@ -40,7 +40,7 @@ pub unsafe fn upload_texture(width: i32, height: i32, format: PixelFormat, ptr: 
         0,
         format.format,
         format.texel_type,
-        ptr as *const _,
+        ptr,
     );
 }
 
