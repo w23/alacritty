@@ -3,7 +3,6 @@ use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::Delta;
 use crate::config::window::{StartupMode, WindowConfig};
 use crate::config::Config;
-use crate::gl::types::*;
 use alacritty_terminal::term::CursorKey;
 use crossfont::{FontDesc, FontKey, Rasterize, Rasterizer, Size, Slant, Style, Weight};
 use fnv::FnvHasher;

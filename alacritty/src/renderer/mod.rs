@@ -2,12 +2,14 @@ pub use glyph::*;
 use shade::*;
 
 mod atlas;
-mod filewatch;
 mod glyphrect;
 mod math;
 mod shade;
 mod solidrect;
 mod texture;
+
+#[cfg(feature = "live-shader-reload")]
+mod filewatch;
 
 pub mod glyph;
 pub mod rects;

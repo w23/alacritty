@@ -5,6 +5,8 @@ use crate::gl;
 use crate::gl::types::*;
 use crate::renderer::Error;
 use alacritty_terminal::term::SizeInfo;
+
+#[cfg(feature = "live-shader-reload")]
 use log::*;
 
 use std::mem::size_of;

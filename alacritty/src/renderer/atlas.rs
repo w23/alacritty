@@ -216,7 +216,7 @@ impl GridAtlas {
 impl Drop for GridAtlas {
     fn drop(&mut self) {
         unsafe {
-            gl::DeleteTextures(1, &mut self.tex);
+            gl::DeleteTextures(1, &self.tex);
         }
     }
 }

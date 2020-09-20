@@ -69,7 +69,7 @@ impl Grid {
     }
 
     fn clear_grid(&mut self) {
-        self.glyphs.iter_mut().map(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 }).count();
+        self.glyphs.iter_mut().for_each(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 });
     }
 }
 
@@ -332,8 +332,8 @@ impl SimpleRenderer {
             grid.clear_grid();
         }
 
-        self.screen_colors_fg.iter_mut().map(|x| *x = [0u8; 4]).count();
-        self.screen_colors_bg.iter_mut().map(|x| *x = [color.r, color.g, color.b]).count();
+        self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 4]);
+        self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b]);
 
         unsafe {
             let alpha = background_opacity;
@@ -497,7 +497,9 @@ impl<'a> RenderContext<'a> {
                     }
 
                     // FIXME how to draw this cursor
-                    _ => {}
+                    _ => {
+											trace!("FIXME Non-grid cursor is broken");
+										}
                 }
             }
 

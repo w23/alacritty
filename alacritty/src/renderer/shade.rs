@@ -1,7 +1,7 @@
 use crate::gl;
 use crate::gl::types::*;
 use alacritty_terminal::term;
-use alacritty_terminal::term::color::Rgb;
+//use alacritty_terminal::term::color::Rgb;
 //use log::*;
 use std::fmt;
 use std::fmt::Display;
@@ -219,11 +219,12 @@ impl Shader {
         Self { kind, id: 0, file: filewatch::File::new(std::path::Path::new(file_path)) }
     }
 
-    #[cfg(not(feature = "live-shader-reload"))]
-    fn from_source(kind: GLuint, src: &str) -> Result<Self, ShaderCreationError> {
-        Ok(Self { kind, id: create_shader_from_source(kind, src)? })
-    }
+    // #[cfg(not(feature = "live-shader-reload"))]
+    // fn from_source(kind: GLuint, src: &str) -> Result<Self, ShaderCreationError> {
+    //     Ok(Self { kind, id: create_shader_from_source(kind, src)? })
+    // }
 
+    #[cfg(feature = "live-shader-reload")]
     fn valid(&self) -> bool {
         self.id != 0
     }
@@ -532,17 +533,17 @@ impl RectShaderProgram {
         Ok(shader)
     }
 
-    pub fn set_color(&self, color: Rgb, alpha: f32) {
-        unsafe {
-            gl::Uniform4f(
-                self.u_color,
-                f32::from(color.r) / 255.,
-                f32::from(color.g) / 255.,
-                f32::from(color.b) / 255.,
-                alpha,
-            );
-        }
-    }
+    // pub fn set_color(&self, color: Rgb, alpha: f32) {
+    //     unsafe {
+    //         gl::Uniform4f(
+    //             self.u_color,
+    //             f32::from(color.r) / 255.,
+    //             f32::from(color.g) / 255.,
+    //             f32::from(color.b) / 255.,
+    //             alpha,
+    //         );
+    //     }
+    // }
 }
 
 impl Drop for RectShaderProgram {
