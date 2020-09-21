@@ -11,18 +11,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Minimum Rust version has been bumped to 1.43.0
 - The snapcraft.yaml file has been removed
+- Updated `setab`/`setaf` capabilities in `alacritty-direct` to use colons
+- WinPTY is now enabled only when targeting MSVC
 
 ### Added
 
 - Secondary device attributes escape (`CSI > 0 c`)
+- Support for colon separated SGR 38/48
+- New Ctrl+C binding to cancel search and leave vi mode
+- Escapes for double underlines (`CSI 4 : 2 m`) and underline reset (`CSI 4 : 0 m`)
+- Configuration file option for sourcing other files (`import`)
+- CLI parameter `--option`/`-o` to override any configuration field
+- Escape sequences to report text area size in pixels (`CSI 14 t`) and in characters (`CSI 18 t`)
 
 ### Changed
 
 - Cursors are now inverted when their fixed color is similar to the cell's background
+- Use working directory of active process instead of shell for SpawnNewInstance action
+- Fallback to normal underline for unsupported underline types in `CSI 4 : ? m` escapes
+- The user's background color is now used as the foreground for the render timer
+- Use yellow/red from the config for error and warning messages instead of fixed colors
+- Existing CLI parameters are now passed to instances spawned using `SpawnNewInstance`
 
 ### Fixed
 
 - Incorrect window location with negative `window.position` config options
+- Slow rendering performance with HiDPI displays, especially on macOS
+- Keys swallowed during search when pressing them right before releasing backspace
+- Crash when a wrapped line is rotated into the last line
+- Selection wrapping to the top when selecting below the error/warning bar
+- Pasting into clients only supporting `UTF8_STRING` mime type on Wayland
+- Crash when copying/pasting with neither pointer nor keyboard focus on Wayland
+- Crash due to fd leak on Wayland
 
 ## 0.5.0
 

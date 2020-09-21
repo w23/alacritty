@@ -54,7 +54,7 @@ mod gl {
 }
 
 use crate::cli::Options;
-use crate::config::monitor::Monitor;
+use crate::config::monitor;
 use crate::config::Config;
 use crate::display::Display;
 use crate::event::{Event, EventProxy, Processor};
@@ -86,9 +86,7 @@ fn main() {
         .expect("Unable to initialize logger");
 
     // Load configuration file.
-    let config_path = options.config_path().or_else(config::installed_config);
-    let config = config_path.map(config::load_from).unwrap_or_else(Config::default);
-    let config = options.into_config(config);
+    let config = config::load(&options);
 
     // Update the log level from config.
     log::set_max_level(config.ui_config.debug.log_level);
@@ -104,7 +102,7 @@ fn main() {
     let persistent_logging = config.ui_config.debug.persistent_logging;
 
     // Run Alacritty.
-    if let Err(err) = run(window_event_loop, config) {
+    if let Err(err) = run(window_event_loop, config, options) {
         error!("Alacritty encountered an unrecoverable error:\n\n\t{}\n", err);
         std::process::exit(1);
     }
@@ -121,12 +119,16 @@ fn main() {
 ///
 /// Creates a window, the terminal state, PTY, I/O event loop, input processor,
 /// config change monitor, and runs the main display loop.
-fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), Box<dyn Error>> {
+fn run(
+    window_event_loop: GlutinEventLoop<Event>,
+    config: Config,
+    options: Options,
+) -> Result<(), Box<dyn Error>> {
     info!("Welcome to Alacritty");
 
-    match &config.config_path {
-        Some(config_path) => info!("Configuration loaded from \"{}\"", config_path.display()),
-        None => info!("No configuration file found"),
+    info!("Configuration files loaded from:");
+    for path in &config.ui_config.config_paths {
+        info!("  \"{}\"", path.display());
     }
 
     // Set environment variables.
@@ -146,7 +148,7 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // This object contains all of the state about what's being displayed. It's
     // wrapped in a clonable mutex since both the I/O loop and display need to
     // access it.
-    let terminal = Term::new(&config, &display.size_info, event_proxy.clone());
+    let terminal = Term::new(&config, display.size_info, event_proxy.clone());
     let terminal = Arc::new(FairMutex::new(terminal));
 
     // Create the PTY.
@@ -182,15 +184,20 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // The monitor watches the config file for changes and reloads it. Pending
     // config changes are processed in the main loop.
     if config.ui_config.live_config_reload() {
-        config.config_path.as_ref().map(|path| Monitor::new(path, event_proxy.clone()));
+        monitor::watch(config.ui_config.config_paths.clone(), event_proxy);
     }
 
     // Setup storage for message UI.
     let message_buffer = MessageBuffer::new();
 
     // Event processor.
-    let mut processor =
-        Processor::new(event_loop::Notifier(loop_tx.clone()), message_buffer, config, display);
+    let mut processor = Processor::new(
+        event_loop::Notifier(loop_tx.clone()),
+        message_buffer,
+        config,
+        display,
+        options,
+    );
 
     // Kick off the I/O thread.
     let io_thread = event_loop.spawn();

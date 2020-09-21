@@ -71,12 +71,12 @@ impl<'a> RenderableSearch<'a> {
     /// Create a new renderable search iterator.
     fn new<T>(term: &'a Term<T>) -> Self {
         let viewport_end = term.grid().display_offset();
-        let viewport_start = viewport_end + term.grid().screen_lines().0 - 1;
+        let viewport_start = viewport_end + term.screen_lines().0 - 1;
 
         // Compute start of the first and end of the last line.
         let start_point = Point::new(viewport_start, Column(0));
         let mut start = term.line_search_left(start_point);
-        let end_point = Point::new(viewport_end, term.grid().cols() - 1);
+        let end_point = Point::new(viewport_end, term.cols() - 1);
         let mut end = term.line_search_right(end_point);
 
         // Set upper bound on search before/after the viewport to prevent excessive blocking.
@@ -311,7 +311,7 @@ impl RenderableCell {
 
     fn is_empty(&self) -> bool {
         self.bg_alpha == 0.
-            && !self.flags.intersects(Flags::UNDERLINE | Flags::STRIKEOUT)
+            && !self.flags.intersects(Flags::UNDERLINE | Flags::STRIKEOUT | Flags::DOUBLE_UNDERLINE)
             && self.inner == RenderableCellContent::Chars([' '; cell::MAX_ZEROWIDTH_CHARS + 1])
     }
 
@@ -745,6 +745,9 @@ pub struct Term<T> {
 
     /// Current forward and backward buffer search regexes.
     regex_search: Option<RegexSearch>,
+
+    /// Information about window dimensions.
+    size: SizeInfo,
 }
 
 impl<T> Term<T> {
@@ -758,7 +761,7 @@ impl<T> Term<T> {
         self.dirty = true;
     }
 
-    pub fn new<C>(config: &Config<C>, size: &SizeInfo, event_proxy: T) -> Term<T> {
+    pub fn new<C>(config: &Config<C>, size: SizeInfo, event_proxy: T) -> Term<T> {
         let num_cols = size.cols();
         let num_lines = size.lines();
 
@@ -795,6 +798,7 @@ impl<T> Term<T> {
             title_stack: Vec::new(),
             selection: None,
             regex_search: None,
+            size,
         }
     }
 
@@ -964,7 +968,9 @@ impl<T> Term<T> {
     }
 
     /// Resize terminal to new dimensions.
-    pub fn resize(&mut self, size: &SizeInfo) {
+    pub fn resize(&mut self, size: SizeInfo) {
+        self.size = size;
+
         let old_cols = self.cols();
         let old_lines = self.screen_lines();
         let num_cols = max(size.cols(), Column(MIN_SIZE));
@@ -986,7 +992,7 @@ impl<T> Term<T> {
         } else if let Some(selection) = self.selection.take() {
             // Move the selection if only number of lines changed.
             let delta = if num_lines > old_lines {
-                (num_lines - old_lines.0).saturating_sub(self.grid.history_size()) as isize
+                (num_lines - old_lines.0).saturating_sub(self.history_size()) as isize
             } else {
                 let cursor_line = self.grid.cursor.point.line;
                 -(min(old_lines - cursor_line - 1, old_lines - num_lines).0 as isize)
@@ -1812,7 +1818,7 @@ impl<T: EventListener> Handler for Term<T> {
             },
         }
 
-        let cursor_buffer_line = (self.grid.screen_lines() - self.grid.cursor.point.line - 1).0;
+        let cursor_buffer_line = (self.screen_lines() - self.grid.cursor.point.line - 1).0;
         self.selection = self
             .selection
             .take()
@@ -1941,7 +1947,7 @@ impl<T: EventListener> Handler for Term<T> {
 
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(..num_lines));
             },
-            ansi::ClearMode::Saved if self.grid.history_size() > 0 => {
+            ansi::ClearMode::Saved if self.history_size() > 0 => {
                 self.grid.clear_history();
 
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(num_lines..));
@@ -2017,8 +2023,17 @@ impl<T: EventListener> Handler for Term<T> {
             Attr::CancelBoldDim => cursor.template.flags.remove(Flags::BOLD | Flags::DIM),
             Attr::Italic => cursor.template.flags.insert(Flags::ITALIC),
             Attr::CancelItalic => cursor.template.flags.remove(Flags::ITALIC),
-            Attr::Underline => cursor.template.flags.insert(Flags::UNDERLINE),
-            Attr::CancelUnderline => cursor.template.flags.remove(Flags::UNDERLINE),
+            Attr::Underline => {
+                cursor.template.flags.remove(Flags::DOUBLE_UNDERLINE);
+                cursor.template.flags.insert(Flags::UNDERLINE);
+            },
+            Attr::DoubleUnderline => {
+                cursor.template.flags.remove(Flags::UNDERLINE);
+                cursor.template.flags.insert(Flags::DOUBLE_UNDERLINE);
+            },
+            Attr::CancelUnderline => {
+                cursor.template.flags.remove(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE);
+            },
             Attr::Hidden => cursor.template.flags.insert(Flags::HIDDEN),
             Attr::CancelHidden => cursor.template.flags.remove(Flags::HIDDEN),
             Attr::Strike => cursor.template.flags.insert(Flags::STRIKEOUT),
@@ -2210,6 +2225,18 @@ impl<T: EventListener> Handler for Term<T> {
             self.set_title(popped);
         }
     }
+
+    #[inline]
+    fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {
+        let width = self.size.cell_width as usize * self.cols().0;
+        let height = self.size.cell_height as usize * self.screen_lines().0;
+        let _ = write!(writer, "\x1b[4;{};{}t", height, width);
+    }
+
+    #[inline]
+    fn text_area_size_chars<W: io::Write>(&mut self, writer: &mut W) {
+        let _ = write!(writer, "\x1b[8;{};{}t", self.screen_lines(), self.cols());
+    }
 }
 
 /// Terminal version for escape sequence reports.
@@ -2333,7 +2360,7 @@ pub mod test {
             padding_y: 0.,
             dpr: 1.,
         };
-        let mut term = Term::new(&Config::<()>::default(), &size, ());
+        let mut term = Term::new(&Config::<()>::default(), size, ());
 
         // Fill terminal with content.
         for (line, text) in lines.iter().rev().enumerate() {
@@ -2390,7 +2417,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(3), Column(5), 0, Cell::default());
         for i in 0..5 {
             for j in 0..2 {
@@ -2446,7 +2473,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(1), Column(5), 0, Cell::default());
         for i in 0..5 {
             grid[Line(0)][Column(i)].c = 'a';
@@ -2475,7 +2502,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(3), Column(3), 0, Cell::default());
         for l in 0..3 {
             if l != 1 {
@@ -2520,7 +2547,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
         let cursor = Point::new(Line(0), Column(0));
         term.configure_charset(CharsetIndex::G0, StandardCharset::SpecialCharacterAndLineDrawing);
         term.input('a');
@@ -2539,7 +2566,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Add one line of scrollback.
         term.grid.scroll_up(&(Line(0)..Line(1)), Line(1), Cell::default());
@@ -2569,20 +2596,20 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Create 10 lines of scrollback.
         for _ in 0..19 {
             term.newline();
         }
-        assert_eq!(term.grid.history_size(), 10);
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(9), Column(0)));
 
         // Increase visible lines.
         size.height = 30.;
-        term.resize(&size);
+        term.resize(size);
 
-        assert_eq!(term.grid.history_size(), 0);
+        assert_eq!(term.history_size(), 0);
         assert_eq!(term.grid.cursor.point, Point::new(Line(19), Column(0)));
     }
 
@@ -2597,13 +2624,13 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Create 10 lines of scrollback.
         for _ in 0..19 {
             term.newline();
         }
-        assert_eq!(term.grid.history_size(), 10);
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(9), Column(0)));
 
         // Enter alt screen.
@@ -2611,12 +2638,12 @@ mod tests {
 
         // Increase visible lines.
         size.height = 30.;
-        term.resize(&size);
+        term.resize(size);
 
         // Leave alt screen.
         term.unset_mode(ansi::Mode::SwapScreenAndSetRestoreCursor);
 
-        assert_eq!(term.grid().history_size(), 0);
+        assert_eq!(term.history_size(), 0);
         assert_eq!(term.grid.cursor.point, Point::new(Line(19), Column(0)));
     }
 
@@ -2631,20 +2658,20 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Create 10 lines of scrollback.
         for _ in 0..19 {
             term.newline();
         }
-        assert_eq!(term.grid.history_size(), 10);
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(9), Column(0)));
 
         // Increase visible lines.
         size.height = 5.;
-        term.resize(&size);
+        term.resize(size);
 
-        assert_eq!(term.grid().history_size(), 15);
+        assert_eq!(term.history_size(), 15);
         assert_eq!(term.grid.cursor.point, Point::new(Line(4), Column(0)));
     }
 
@@ -2659,13 +2686,13 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Create 10 lines of scrollback.
         for _ in 0..19 {
             term.newline();
         }
-        assert_eq!(term.grid.history_size(), 10);
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(9), Column(0)));
 
         // Enter alt screen.
@@ -2673,12 +2700,12 @@ mod tests {
 
         // Increase visible lines.
         size.height = 5.;
-        term.resize(&size);
+        term.resize(size);
 
         // Leave alt screen.
         term.unset_mode(ansi::Mode::SwapScreenAndSetRestoreCursor);
 
-        assert_eq!(term.grid().history_size(), 15);
+        assert_eq!(term.history_size(), 15);
         assert_eq!(term.grid.cursor.point, Point::new(Line(4), Column(0)));
     }
 
@@ -2693,7 +2720,7 @@ mod tests {
             padding_y: 0.0,
             dpr: 1.0,
         };
-        let mut term = Term::new(&MockConfig::default(), &size, Mock);
+        let mut term = Term::new(&MockConfig::default(), size, Mock);
 
         // Title None by default.
         assert_eq!(term.title, None);
@@ -2796,7 +2823,7 @@ mod benches {
 
         let config = MockConfig::default();
 
-        let mut terminal = Term::new(&config, &size, Mock);
+        let mut terminal = Term::new(&config, size, Mock);
         mem::swap(&mut terminal.grid, &mut grid);
 
         b.iter(|| {

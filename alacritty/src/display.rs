@@ -25,8 +25,7 @@ use crossfont::set_font_smoothing;
 use crossfont::{self, Rasterize, Rasterizer};
 
 use alacritty_terminal::event::{EventListener, OnResize};
-use alacritty_terminal::index::{Column, Point};
-use alacritty_terminal::index::{Direction, Line};
+use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::{RenderableCell, SizeInfo, Term, TermMode};
 
@@ -34,7 +33,7 @@ use crate::config::font::Font;
 use crate::config::window::StartupMode;
 use crate::config::Config;
 use crate::event::{Mouse, SearchState};
-use crate::message_bar::MessageBuffer;
+use crate::message_bar::{MessageBuffer, MessageType};
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
 use crate::renderer::{self, simple::SimpleRenderer, simple::RenderContext, GlyphCache};
@@ -430,7 +429,7 @@ impl Display {
         pty_resize_handle.on_resize(&pty_size);
 
         // Resize terminal.
-        terminal.resize(&pty_size);
+        terminal.resize(pty_size);
 
         // Resize renderer.
         let physical = PhysicalSize::new(self.size_info.width as u32, self.size_info.height as u32);
@@ -516,13 +515,20 @@ impl Display {
             // // Create a new rectangle for the background.
             // let start_line = size_info.lines().0 - message_bar_lines;
             // let y = size_info.cell_height.mul_add(start_line as f32, size_info.padding_y);
+            //
+            // let color = match message.ty() {
+            //     MessageType::Error => config.colors.normal().red,
+            //     MessageType::Warning => config.colors.normal().yellow,
+            // };
+            //
             // let message_bar_rect =
-            //     RenderRect::new(0., y, size_info.width, size_info.height - y, message.color(), 1.);
+            //     RenderRect::new(0., y, size_info.width, size_info.height - y, color, 1.);
             //
             // // Push message_bar in the end, so it'll be above all other content.
             // rects.push(message_bar_rect);
             //
-            // // Draw rectangles.  render_context.draw_rects(&size_info, rects);
+            // // Draw rectangles.
+            // self.renderer.draw_rects(&size_info, rects);
 
             // Relay messages to the user.
             let fg = config.colors.primary.background;
@@ -532,7 +538,7 @@ impl Display {
                         Line(size_info.lines().saturating_sub(i + 1)),
                         &message_text,
                         fg,
-                        Some(message.color()),
+                        None
                     );
             }
         }
@@ -679,8 +685,9 @@ impl Display {
         if !config.ui_config.debug.render_timer {
             return;
         }
+
         let timing = format!("{:.3} usec", meter.average());
-        let fg = config.colors.normal().black;
+        let fg = config.colors.primary.background;
         let bg = config.colors.normal().red;
 
         render_context.render_string(glyph_cache, size_info.lines() - 2, &timing[..], fg, Some(bg));

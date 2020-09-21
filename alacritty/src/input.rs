@@ -242,7 +242,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ScrollPageUp => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                let scroll_lines = term.grid().screen_lines().0 as isize;
+                let scroll_lines = term.screen_lines().0 as isize;
                 term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
 
                 ctx.scroll(Scroll::PageUp);
@@ -250,7 +250,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ScrollPageDown => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                let scroll_lines = -(term.grid().screen_lines().0 as isize);
+                let scroll_lines = -(term.screen_lines().0 as isize);
                 term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
 
                 ctx.scroll(Scroll::PageDown);
@@ -258,7 +258,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ScrollHalfPageUp => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                let scroll_lines = term.grid().screen_lines().0 as isize / 2;
+                let scroll_lines = term.screen_lines().0 as isize / 2;
                 term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
 
                 ctx.scroll(Scroll::Delta(scroll_lines));
@@ -266,7 +266,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ScrollHalfPageDown => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                let scroll_lines = -(term.grid().screen_lines().0 as isize / 2);
+                let scroll_lines = -(term.screen_lines().0 as isize / 2);
                 term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
 
                 ctx.scroll(Scroll::Delta(scroll_lines));
@@ -274,8 +274,8 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ScrollLineUp => {
                 // Move vi mode cursor.
                 let term = ctx.terminal();
-                if term.grid().display_offset() != term.grid().history_size()
-                    && term.vi_mode_cursor.point.line + 1 != term.grid().screen_lines()
+                if term.grid().display_offset() != term.history_size()
+                    && term.vi_mode_cursor.point.line + 1 != term.screen_lines()
                 {
                     ctx.terminal_mut().vi_mode_cursor.point.line += 1;
                 }
@@ -304,7 +304,7 @@ impl<T: EventListener> Execute<T> for Action {
 
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                term.vi_mode_cursor.point.line = term.grid().screen_lines() - 1;
+                term.vi_mode_cursor.point.line = term.screen_lines() - 1;
 
                 // Move to beginning twice, to always jump across linewraps.
                 term.vi_motion(ViMotion::FirstOccupied);
@@ -377,7 +377,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
         self.ctx.mouse_mut().x = x;
         self.ctx.mouse_mut().y = y;
 
-        let inside_grid = size_info.contains_point(x, y);
+        let inside_text_area = size_info.contains_point(x, y);
         let point = size_info.pixels_to_coords(x, y);
         let cell_side = self.get_mouse_side();
 
@@ -387,12 +387,12 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
         // If the mouse hasn't changed cells, do nothing.
         if !cell_changed
             && self.ctx.mouse().cell_side == cell_side
-            && self.ctx.mouse().inside_grid == inside_grid
+            && self.ctx.mouse().inside_text_area == inside_text_area
         {
             return;
         }
 
-        self.ctx.mouse_mut().inside_grid = inside_grid;
+        self.ctx.mouse_mut().inside_text_area = inside_text_area;
         self.ctx.mouse_mut().cell_side = cell_side;
         self.ctx.mouse_mut().line = point.line;
         self.ctx.mouse_mut().column = point.col;
@@ -405,23 +405,14 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
         self.update_url_state(&mouse_state);
         self.ctx.window_mut().set_mouse_cursor(mouse_state.into());
 
-        let last_term_line = self.ctx.terminal().grid().screen_lines() - 1;
         if (lmb_pressed || rmb_pressed)
             && (self.ctx.modifiers().shift() || !self.ctx.mouse_mode())
             && !search_active
         {
-            // Treat motion over message bar like motion over the last line.
-            let line = min(point.line, last_term_line);
-
-            // Move vi mode cursor to mouse cursor position.
-            if self.ctx.terminal().mode().contains(TermMode::VI) {
-                self.ctx.terminal_mut().vi_mode_cursor.point = point;
-            }
-
-            self.ctx.update_selection(Point { line, col: point.col }, cell_side);
-        } else if inside_grid
+            self.ctx.update_selection(point, cell_side);
+        } else if inside_text_area
             && cell_changed
-            && point.line <= last_term_line
+            && point.line < self.ctx.terminal().screen_lines()
             && self.ctx.terminal().mode().intersects(TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG)
         {
             if lmb_pressed {
@@ -566,7 +557,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
             // Load mouse point, treating message bar and padding as the closest cell.
             let mouse = self.ctx.mouse();
             let mut point = self.ctx.size_info().pixels_to_coords(mouse.x, mouse.y);
-            point.line = min(point.line, self.ctx.terminal().grid().screen_lines() - 1);
+            point.line = min(point.line, self.ctx.terminal().screen_lines() - 1);
 
             match button {
                 MouseButton::Left => self.on_left_click(point),
@@ -779,7 +770,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
 
             // Reset cursor when message bar height changed or all messages are gone.
             let size = self.ctx.size_info();
-            let current_lines = (size.lines() - self.ctx.terminal().grid().screen_lines()).0;
+            let current_lines = (size.lines() - self.ctx.terminal().screen_lines()).0;
             let new_lines = self.ctx.message().map(|m| m.text(&size).len()).unwrap_or(0);
 
             let new_icon = match current_lines.cmp(&new_lines) {
@@ -832,7 +823,8 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
 
                         *self.ctx.suppress_chars() = true;
                     },
-                    (Some(VirtualKeyCode::Escape), _) => {
+                    (Some(VirtualKeyCode::Escape), _)
+                    | (Some(VirtualKeyCode::C), ModifiersState::CTRL) => {
                         self.ctx.cancel_search();
                         *self.ctx.suppress_chars() = true;
                     },
@@ -862,7 +854,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
                 *self.ctx.received_count() = 0;
                 self.process_key_bindings(input);
             },
-            ElementState::Released => *self.ctx.suppress_chars() = false,
+            ElementState::Released => (),
         }
     }
 
@@ -890,6 +882,8 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
                     self.ctx.push_search(c);
                 }
             }
+
+            *self.ctx.suppress_chars() = false;
 
             return;
         }
@@ -950,7 +944,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
                 let binding = binding.clone();
                 binding.execute(&mut self.ctx);
 
-                // Don't suppress when there has been a `ReceiveChar` action.
+                // Pass through the key if any of the bindings has the `ReceiveChar` action.
                 *suppress_chars.get_or_insert(true) &= binding.action != Action::ReceiveChar;
             }
         }
@@ -984,7 +978,7 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
 
     /// Check if the cursor is hovering above the message bar.
     fn message_at_cursor(&mut self) -> bool {
-        self.ctx.mouse().line >= self.ctx.terminal().grid().screen_lines()
+        self.ctx.mouse().line >= self.ctx.terminal().screen_lines()
     }
 
     /// Whether the point is over the message bar's close button.
@@ -994,9 +988,9 @@ impl<'a, T: EventListener, A: ActionContext<T>> Processor<'a, T, A> {
         // Since search is above the message bar, the button is offset by search's height.
         let search_height = if self.ctx.search_active() { 1 } else { 0 };
 
-        mouse.inside_grid
+        mouse.inside_text_area
             && mouse.column + message_bar::CLOSE_BUTTON_TEXT.len() >= self.ctx.size_info().cols()
-            && mouse.line == self.ctx.terminal().grid().screen_lines() + search_height
+            && mouse.line == self.ctx.terminal().screen_lines() + search_height
     }
 
     /// Copy text selection.
@@ -1301,7 +1295,7 @@ mod tests {
 
                 let mut clipboard = Clipboard::new_nop();
 
-                let mut terminal = Term::new(&cfg, &size, MockEventProxy);
+                let mut terminal = Term::new(&cfg, size, MockEventProxy);
 
                 let mut mouse = Mouse::default();
                 mouse.click_state = $initial_state;
