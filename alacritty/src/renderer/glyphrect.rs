@@ -56,7 +56,6 @@ pub struct Rectifier {
     program: GlyphRectShaderProgram,
     indices: Vec<u16>,
     vertices: Vec<Vertex>,
-    size_info: Option<SizeInfo>,
 }
 
 impl Rectifier {
@@ -78,37 +77,21 @@ impl Rectifier {
             program: GlyphRectShaderProgram::new()?,
             indices: Vec::new(),
             vertices: Vec::new(),
-            size_info: None,
         })
     }
 
-    pub fn begin(&mut self, size_info: &SizeInfo) {
+    pub fn clear(&mut self) {
         self.indices.clear();
         self.vertices.clear();
-        self.size_info = Some(*size_info);
-
-        #[cfg(feature = "live-shader-reload")]
-        {
-            match self.program.poll() {
-                Err(e) => {
-                    error!("shader error: {}", e);
-                }
-                Ok(updated) if updated => {
-                    debug!("updated shader: {:?}", self.program);
-                }
-                _ => {}
-            }
-        }
     }
 
-    pub fn add(&mut self, glyph: &GlyphRect) -> Result<(), RectAddError> {
+    pub fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphRect) -> Result<(), RectAddError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);
         }
         let index = index as u16;
 
-        let size_info = self.size_info.as_ref().unwrap();
         let g = glyph.geom;
 
         // Calculate rectangle position.
@@ -154,8 +137,20 @@ impl Rectifier {
         Ok(())
     }
 
-    pub fn draw(&self) {
-        let size_info = self.size_info.as_ref().unwrap();
+    pub fn draw(&mut self, size_info: &SizeInfo) {
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                }
+                Ok(updated) if updated => {
+                    debug!("updated shader: {:?}", self.program);
+                }
+                _ => {}
+            }
+        }
+
         if self.indices.is_empty() {
             return;
         }

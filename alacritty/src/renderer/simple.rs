@@ -40,6 +40,8 @@ struct GlyphRef {
 #[derive(Debug)]
 struct Grid {
     atlas: GridAtlas,
+
+    /// Screen worth of glyphs
     glyphs: Vec<GlyphRef>,
 }
 
@@ -74,9 +76,55 @@ impl Grid {
 }
 
 #[derive(Debug)]
-struct QuadGlyph {
+struct QuadGlyphBatches {
     atlas: Atlas,
+
+    // FIXME each batch will have its own shader program. that's suboptimal
     batches: Vec<glyphrect::Rectifier>,
+}
+
+impl QuadGlyphBatches {
+    fn new(index: usize) -> Self {
+        Self { atlas: Atlas::new(index, 1024), batches: Vec::new() }
+        //glyphrect::Rectifier::new().unwrap() }
+    }
+
+    fn clear_atlas(&mut self) {
+        self.atlas.clear();
+    }
+
+    fn clear(&mut self) {
+        for batch in &mut self.batches {
+            batch.clear();
+        }
+    }
+
+    fn add(&mut self, size_info: &SizeInfo, glyph_rect: &glyphrect::GlyphRect) {
+        loop {
+            if !self.batches.is_empty() {
+                match self.batches.last_mut().unwrap().add(size_info, glyph_rect) {
+                    Ok(_) => {
+                        return;
+                    }
+                    Err(glyphrect::RectAddError::Full) => {}
+                }
+            }
+
+            self.batches.push(glyphrect::Rectifier::new().unwrap());
+        }
+    }
+
+    fn draw(&mut self, size_info: &SizeInfo) {
+        unsafe {
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas.id);
+        }
+
+        for batch in &mut self.batches {
+            // FIXME each of these draws will unnecessarily update lots of GL state that could be shared
+            batch.draw(size_info);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -104,9 +152,7 @@ pub struct SimpleRenderer {
     cursor_glyph: [f32; 2],
     cursor_color: Rgb,
 
-    //atlas: Vec<Atlas>,
-    atlas: Atlas,
-    overglyphs: glyphrect::Rectifier,
+    quad_glyph_batches: Vec<QuadGlyphBatches>,
 
     rectifier: solidrect::Rectifier,
 }
@@ -166,8 +212,7 @@ impl SimpleRenderer {
             cursor_glyph: [-1.0; 2],
             cursor_color: Rgb { r: 0, g: 0, b: 0 },
 
-            atlas: Atlas::new(0, 1024),
-            overglyphs: glyphrect::Rectifier::new()?,
+            quad_glyph_batches: Vec::new(),
 
             rectifier: solidrect::Rectifier::new()?,
         })
@@ -192,7 +237,9 @@ impl SimpleRenderer {
         cursor_config: Cursor,
         size_info: &'a SizeInfo,
     ) -> RenderContext<'a> {
-        self.overglyphs.begin(size_info);
+        for batches in &mut self.quad_glyph_batches {
+            batches.clear();
+        }
         RenderContext { this: self, size_info, config, cursor_config }
     }
 
@@ -208,7 +255,6 @@ impl SimpleRenderer {
     }
 
     pub fn resize(&mut self, size: &term::SizeInfo) {
-        // Viewport.
         unsafe {
             gl::Viewport(
                 size.padding_x as i32,
@@ -289,8 +335,6 @@ impl SimpleRenderer {
             gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
             gl::EnableVertexAttribArray(0);
         }
-
-        debug!("Grids: {}", self.grids.len());
 
         for grid in &self.grids {
             let atlas_dims = grid.atlas.cell_dims();
@@ -394,19 +438,37 @@ impl LoadGlyph for SimpleRenderer {
             }
         }
 
-        // FIXME allow errors to be propagated
-        let gl = self.atlas.insert(rasterized).unwrap();
-        debug!(
-            "free {} wide:{} zero_width:{} -> {:?}",
-            rasterized.rasterized.c, rasterized.wide, rasterized.zero_width, gl
-        );
-        gl
+        for batches in &mut self.quad_glyph_batches {
+            match batches.atlas.insert(rasterized) {
+                Ok(glyph) => {
+                    return glyph;
+                }
+                Err(AtlasInsertError::GlyphTooLarge) => {
+                    panic!("FIXME handle this by returning dummy 0 glyph");
+                }
+                Err(AtlasInsertError::Full) => {}
+            }
+        }
+
+        self.quad_glyph_batches.push(QuadGlyphBatches::new(self.quad_glyph_batches.len()));
+        match self.quad_glyph_batches.last_mut().unwrap().atlas.insert(rasterized) {
+            Ok(glyph) => glyph,
+            Err(AtlasInsertError::GlyphTooLarge) => {
+                panic!("FIXME handle this by returning dummy 0 glyph");
+            }
+            Err(AtlasInsertError::Full) => {
+                panic!("New atlas is already full?!");
+            }
+        }
     }
 
     fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
         self.cell_size = cell_size;
         self.cell_offset = cell_offset;
-        self.atlas.clear();
+
+        for quad in &mut self.quad_glyph_batches {
+            quad.clear_atlas();
+        }
 
         for (index, grid) in &mut self.grids.iter_mut().enumerate() {
             grid.clear_atlas(index, cell_size, cell_offset);
@@ -610,7 +672,7 @@ impl<'a> RenderContext<'a> {
                 };
             }
             AtlasRef::Free(free) => {
-                self.this.overglyphs.add(&glyphrect::GlyphRect {
+                let glyph_rect = glyphrect::GlyphRect {
                     pos: Vec2::<i16> {
                         x: (if zero_width {
                             // The metrics of zero-width characters are based on rendering
@@ -629,7 +691,9 @@ impl<'a> RenderContext<'a> {
                     geom: free,
                     fg: cell.fg,
                     colored: glyph.colored,
-                });
+                };
+
+                self.this.quad_glyph_batches[glyph.atlas_index].add(self.size_info, &glyph_rect);
             }
         }
     }
@@ -645,12 +709,15 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn draw_grid_text(&mut self) {
+        debug!(
+            "Grids: {}, quad atlas-batches: {}",
+            self.this.grids.len(),
+            self.this.quad_glyph_batches.len()
+        );
         self.this.paint(self.size_info);
-        unsafe {
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D, self.this.atlas.id);
+        for batches in &mut self.this.quad_glyph_batches {
+            batches.draw(self.size_info);
         }
-        self.this.overglyphs.draw();
     }
 }
 
