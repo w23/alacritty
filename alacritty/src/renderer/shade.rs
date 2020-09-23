@@ -194,16 +194,6 @@ macro_rules! cptr {
     };
 }
 
-macro_rules! assert_uniform_valid {
-		($uniform:expr) => {
-				assert!($uniform != gl::INVALID_VALUE as i32);
-				assert!($uniform != gl::INVALID_OPERATION as i32);
-		};
-		( $( $uniform:expr ),* ) => {
-				$( assert_uniform_valid!($uniform); )*
-		};
-}
-
 #[derive(Debug)]
 struct Shader {
     kind: GLuint,
@@ -332,29 +322,6 @@ impl Drop for ShaderProgram {
     }
 }
 
-/// Draw text using glyph refs
-///
-/// Uniforms are prefixed with "u", and vertex attributes are prefixed with "a".
-#[derive(Debug)]
-pub struct ScreenShaderProgram {
-    pub program: ShaderProgram,
-
-    /// vec4(pad.xy, resolution.xy)
-    pub u_screen_dim: GLint,
-
-    /// Cell dimensions (pixels).
-    pub u_cell_dim: GLint,
-
-    pub u_glyph_ref: GLint,
-    pub u_color_fg: GLint,
-    pub u_color_bg: GLint,
-    pub u_cursor: GLint,
-    pub u_cursor_color: GLint,
-
-    pub u_atlas: GLint,
-    pub u_atlas_dim: GLint,
-}
-
 // static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.f.glsl");
 // static TEXT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.v.glsl");
 static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
@@ -384,103 +351,76 @@ static SCREEN_SHADER_V: &str =
 static SCREEN_SHADER_F: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
 
-impl ScreenShaderProgram {
-    #[cfg(feature = "live-shader-reload")]
-    pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        Ok(Self {
-            program: ShaderProgram::from_files(SCREEN_SHADER_V_PATH, SCREEN_SHADER_F_PATH)?,
-            u_screen_dim: -1,
-            u_cell_dim: -1,
-            u_glyph_ref: -1,
-            u_atlas: -1,
-            u_atlas_dim: -1,
-            u_color_fg: -1,
-            u_color_bg: -1,
-            u_cursor: -1,
-            u_cursor_color: -1,
-        })
-    }
+macro_rules! declare_program {
+	($struct:ident, $vpath:ident, $vsrc:ident, $fpath:ident, $fsrc:ident {$( $uniform:ident ),*}) => {
+	  #[derive(Debug)]
+		pub struct $struct {
+			pub program: ShaderProgram,
+			$(
+				pub $uniform: GLint,
+			)*
+		}
 
-    #[cfg(not(feature = "live-shader-reload"))]
-    pub fn new() -> Result<ScreenShaderProgram, ShaderCreationError> {
-        let program = ShaderProgram::from_sources(SCREEN_SHADER_V, SCREEN_SHADER_F)?;
-        let mut this = Self {
-            program,
-            u_screen_dim: -1,
-            u_cell_dim: -1,
-            u_glyph_ref: -1,
-            u_atlas: -1,
-            u_atlas_dim: -1,
-            u_color_fg: -1,
-            u_color_bg: -1,
-            u_cursor: -1,
-            u_cursor_color: -1,
-        };
+		impl $struct {
+			#[cfg(feature = "live-shader-reload")]
+			pub fn new() -> Result<Self, ShaderCreationError> {
+				Ok(Self {
+						program: ShaderProgram::from_files($vpath, $fpath)?,
+					$(
+						$uniform: -1,
+					)*
+				})
+			}
+
+			#[cfg(not(feature = "live-shader-reload"))]
+			pub fn new() -> Result<Self, ShaderCreationError> {
+				let mut this = Self {
+						program: ShaderProgram::from_sources($vsrc, $fsrc)?,
+					$(
+						$uniform: -1,
+					)*
+				};
         this.update(true);
-        Ok(this)
+				Ok(this)
+			}
+
+			fn update(&mut self, validate_uniforms: bool) {
+				$(
+					 self.$uniform = unsafe { gl::GetUniformLocation(self.program.id, cptr!(concat!(stringify!($uniform), "\0"))) };
+					if validate_uniforms {
+						assert!(self.$uniform != gl::INVALID_VALUE as i32);
+							assert!(self.$uniform != gl::INVALID_OPERATION as i32);
+					}
+				)*
+			}
+
+			#[cfg(feature = "live-shader-reload")]
+			pub fn poll(&mut self) -> Result<bool, ShaderCreationError> {
+					if self.program.poll()? {
+							self.update(false);
+							return Ok(true);
+					}
+					Ok(false)
+			}
+		}
+	}
+}
+
+declare_program! { ScreenShaderProgram,
+    SCREEN_SHADER_V_PATH, SCREEN_SHADER_V, SCREEN_SHADER_F_PATH, SCREEN_SHADER_F {
+        u_screen_dim,
+        u_cell_dim,
+        u_atlas,
+        u_color_bg,
+        u_color_fg,
+        u_glyph_ref,
+        u_cursor,
+        u_cursor_color,
+        u_atlas_dim
     }
+}
 
-    fn update(&mut self, validate_uniforms: bool) {
-        // get uniform locations
-        let (
-            screen_dim,
-            cell_dim,
-            atlas,
-            color_bg,
-            color_fg,
-            glyph_ref,
-            cursor,
-            cursor_color,
-            atlas_dim,
-        ) = unsafe {
-            (
-                gl::GetUniformLocation(self.program.id, cptr!(b"screen_dim\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cell_dim\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"color_bg\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"color_fg\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"glyph_ref\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cursor\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"cursor_color\0")),
-                gl::GetUniformLocation(self.program.id, cptr!(b"atlas_dim\0")),
-            )
-        };
-
-        if validate_uniforms {
-            assert_uniform_valid!(
-                screen_dim,
-                cell_dim,
-                atlas,
-                color_bg,
-                color_fg,
-                glyph_ref,
-                cursor,
-                cursor_color,
-                atlas_dim
-            );
-        }
-
-        self.u_screen_dim = screen_dim;
-        self.u_cell_dim = cell_dim;
-        self.u_glyph_ref = glyph_ref;
-        self.u_atlas = atlas;
-        self.u_color_fg = color_fg;
-        self.u_color_bg = color_bg;
-        self.u_cursor = cursor;
-        self.u_cursor_color = cursor_color;
-        self.u_atlas_dim = atlas_dim;
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    pub fn poll(&mut self) -> Result<bool, ShaderCreationError> {
-        if self.program.poll()? {
-            self.update(false);
-            return Ok(true);
-        }
-
-        Ok(false)
-    }
-
+impl ScreenShaderProgram {
     pub fn set_term_uniforms(&self, props: &term::SizeInfo) {
         unsafe {
             gl::Uniform4f(
