@@ -11,17 +11,18 @@ uniform vec2 u_cell_dim;
 uniform vec4 u_atlas_dim; // .xy = offset, .zw = cell_size
 uniform vec4 u_cursor;
 uniform vec3 u_cursor_color;
+uniform bool u_main_pass;
+uniform float u_background_opacity;
 
-vec4 drawGlyph(vec4 glyph, vec2 cell_pix, vec3 bg, vec3 fg) {
+vec4 getGlyphPixel(vec4 glyph, vec2 cell_pix, vec3 fg) {
 	vec2 atlas_pix = glyph.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
 	vec4 mask = texture(u_atlas, atlas_pix / vec2(textureSize(u_atlas, 0)));
 
-	//return mask.rgb;
-
-	if (glyph.z > 0.) {
-		return vec4(mix(bg, mask.rgb, mask.a), mask.a);
-	} else
-		return vec4(mix(bg, fg.rgb, mask.rgb), mask.r);
+	if (glyph.z > 0.)
+		return mask; // colored glyph
+	else
+		return vec4(mask.rgb * fg, min(1., mask.r+mask.g+mask.b));
+		//return vec4(mask.rgb * fg, max(mask.r, max(mask.g, mask.b));
 }
 
 void main() {
@@ -43,27 +44,47 @@ void main() {
 	vec4 glyph = texture(u_glyph_ref, tuv);
 	vec3 fg = texture(u_color_fg, tuv).rgb;
 	vec3 bg = texture(u_color_bg, tuv).rgb;
+	vec2 cell_pix = mod(uv, u_cell_dim);
 
-	if (glyph.xy == vec2(0.)) {
-		//discard;
-		//return;
+	bool empty = (glyph.xy == vec2(0.));
+
+	if (u_main_pass) {
+		color = vec4(bg, u_background_opacity);
+		if (cell == u_cursor.xy)
+			color = getGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color);
+	} else {
+		color = vec4(0.);
 	}
 
-	color = vec4(bg, 1.);
+	// FIXME: discard on non-main, return on main
+	// IF there are no overlapping glyph parts from neighbour grid cells
+	/* if (glyph.xy == vec2(0.)) { */
+	/* 		return; */
+	/* } */
 
-	vec2 cell_pix = mod(uv, u_cell_dim);
-	if (cell == u_cursor.xy)
-		color = drawGlyph(vec4(u_cursor.zw, 0., 0.), cell_pix, color.rgb, u_cursor_color);
-	color = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix, color.rgb, fg.rgb);
+	//if (u_main_pass && empty) { color = vec4(1., 0., 0., 1.); return; }
+
+	/* if (!u_main_pass) { */
+	/* 	if (glyph.xy == vec2(0.)) { */
+	/* 			discard; */
+	/* 	} */
+  /*  */
+	/* 	color = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix); */
+	/* 	return; */
+	/* } */
+
+	vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix, fg);
+	color = mix(color, pixel, pixel.a);
+
+	//color = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix, color.rgb, fg.rgb);
 
 	if (cell_pix.y > (u_cell_dim.y - u_atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
 		vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells;
 		vec4 glyph = texture(u_glyph_ref, tuv);
 		vec3 fg = texture(u_color_fg, tuv).rgb;
-		vec3 bg = texture(u_color_bg, tuv).rgb;
-		vec4 c = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -u_cell_dim.y), color.rgb, fg.rgb);
-		color = mix(color, c, c.a);
+		vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -u_cell_dim.y), fg);
 		//color.g = 1.;
+		color = mix(color, pixel, pixel.a);
 	}
 
 	if (cell_pix.x < (u_atlas_dim.z - u_cell_dim.x) && cell.x > 0.) {
@@ -71,9 +92,9 @@ void main() {
 		vec4 glyph = texture(u_glyph_ref, tuv);
 		vec3 fg = texture(u_color_fg, tuv).rgb;
 		vec3 bg = texture(u_color_bg, tuv).rgb;
-		vec4 c = drawGlyph(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), color.rgb, fg.rgb);
+		vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), fg);
 		//color.b = 1.;
-		color = mix(color, c, c.a);
+		color = mix(color, pixel, pixel.a);
 	}
 
 	// TODO:

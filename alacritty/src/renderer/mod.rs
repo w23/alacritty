@@ -37,7 +37,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            }
+            },
         }
     }
 }
@@ -362,7 +362,8 @@ impl From<ShaderCreationError> for Error {
 //             gl::Viewport(0, 0, props.width as i32, props.height as i32);
 //
 //             // Change blending strategy.
-//             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+//             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA,
+// gl::ONE);
 //
 //             // Setup data and buffers.
 //             gl::BindVertexArray(self.rect_vao);
@@ -503,8 +504,8 @@ impl From<ShaderCreationError> for Error {
 //
 //             // Update projection.
 //             gl::UseProgram(self.program.id);
-//             self.program.update_projection(size.width, size.height, size.padding_x, size.padding_y);
-//             gl::UseProgram(0);
+//             self.program.update_projection(size.width, size.height, size.padding_x,
+// size.padding_y);             gl::UseProgram(0);
 //         }
 //     }
 //

@@ -44,7 +44,6 @@ impl GridAtlas {
     pub fn new(index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
         // FIXME limit atlas size by 256x256 cells
 
-        // FIXME add guard padding back
         let atlas_cell_size = cell_size + cell_offset;
         let padding = (atlas_cell_size * GRID_ATLAS_PAD_PCT + 99) / 100;
         let half_padding = padding / 2;
@@ -61,7 +60,7 @@ impl GridAtlas {
             half_padding,
             grid_size: Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size,
             free_line: 0,
-            free_column: 1,
+            free_column: 1, // 0,0 = sentinel value, no glyph
         };
         debug!("atlas: {:?}", ret);
         ret
@@ -80,44 +79,43 @@ impl GridAtlas {
         let line = self.free_line;
         let column = self.free_column;
 
-        /* Atlas cell metrics in logical glyph space
-         *   .----------------.<-- single glyph cell in atlas texture (self.cell_size)
-         *   |                |
-         *   |    .------.<---+---- rasterized glyph bbox (width, height)
-         *   |    |  ##  |    |^
-         *   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped on screen w/o overlap (not really used in atlas explicitly)
-         *   |  . |#    #| .  ||
-         *   |  . |######| .  ||--- rasterized.top, relative to baseline/origin.y
-         *   |  . |#    #| .  ||
-         *   |  . |#    #| .  ||
-         *   |  . '------'-.  |v
-         *   |  . . . . . . --+--- baseline
-         *   |  ^             |
-         *   |  |             |
-         *   '--+-------------'
-         *   ^  |
-         *   |  `-logical monospace grid cell origin, (0, 0)
-         *   `- atlas cell origin, -self.cell_offset relative to origin
-         *
-         * THIS BEAUTY NOW NEEDS TO BE MAPPED TO INVERSE OPENGL TEXTURE SPACE:
-         *
-         *   .----------------.-------
-         *   |                |^   ^
-         *   |  . . . . . .   ||---+-- self.cell_size.y
-         *   |  . .------.-.--++---|
-         *   |  . |#    #| .  || ^ |
-         *   |  . |#    #| .  || | |
-         *   |  . |######| .  || |-+--- rasterized.height
-         *   |  . |#    #| .  || | |
-         *   |  . | #  # | .  || | |-- rasterized.top
-         *   |    |  ##  |    || v v
-         *   |    '------'----|+-----.
-         *   |                |v      } offset.y = self.cell_size.y - rasterized.top
-         *   '----------------'------`
-         *   ^
-         *   `- atlas cell texture origin (0, 0)
-         *
-         */
+        // Atlas cell metrics in logical glyph space
+        //   .----------------.<-- single glyph cell in atlas texture (self.cell_size)
+        //   |                |
+        //   |    .------.<---+---- rasterized glyph bbox (width, height)
+        //   |    |  ##  |    |^
+        //   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped on screen w/o
+        // overlap (not really used in atlas explicitly)   |  . |#    #| .  ||
+        //   |  . |######| .  ||--- rasterized.top, relative to baseline/origin.y
+        //   |  . |#    #| .  ||
+        //   |  . |#    #| .  ||
+        //   |  . '------'-.  |v
+        //   |  . . . . . . --+--- baseline
+        //   |  ^             |
+        //   |  |             |
+        //   '--+-------------'
+        //   ^  |
+        //   |  `-logical monospace grid cell origin, (0, 0)
+        //   `- atlas cell origin, -self.cell_offset relative to origin
+        //
+        // THIS BEAUTY NOW NEEDS TO BE MAPPED TO INVERSE OPENGL TEXTURE SPACE:
+        //
+        //   .----------------.-------
+        //   |                |^   ^
+        //   |  . . . . . .   ||---+-- self.cell_size.y
+        //   |  . .------.-.--++---|
+        //   |  . |#    #| .  || ^ |
+        //   |  . |#    #| .  || | |
+        //   |  . |######| .  || |-+--- rasterized.height
+        //   |  . |#    #| .  || | |
+        //   |  . | #  # | .  || | |-- rasterized.top
+        //   |    |  ##  |    || v v
+        //   |    '------'----|+-----.
+        //   |                |v      } offset.y = self.cell_size.y - rasterized.top
+        //   '----------------'------`
+        //   ^
+        //   `- atlas cell texture origin (0, 0)
+        //
 
         let off_x = self.cell_offset.x + rasterized.left;
         let off_y = self.cell_size.y - rasterized.top - self.half_padding.y;
@@ -145,7 +143,6 @@ impl GridAtlas {
         }
 
         // FIXME don't do this:
-        let wide = rasterized.width > self.cell_size.x * 3 / 2;
         let colored;
 
         unsafe {
@@ -172,7 +169,7 @@ impl GridAtlas {
                 std::cmp::max(0, tex_x), // FIXME
                 std::cmp::max(0, tex_y), // FIXME
                 rasterized.width,        // FIXME limit width with stride
-                //std::cmp::min(rasterized.width, self.cell_size.x),
+                // std::cmp::min(rasterized.width, self.cell_size.x),
                 std::cmp::min(rasterized.height, self.cell_size.y),
                 format,
                 gl::UNSIGNED_BYTE,
@@ -197,7 +194,7 @@ impl GridAtlas {
             tex_y,
         );
 
-        self.free_column += if wide { 2 } else { 1 };
+        self.free_column += 1;
         if self.free_column == self.grid_size.x {
             self.free_column = 0;
             self.free_line += 1;

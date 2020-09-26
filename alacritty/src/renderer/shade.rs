@@ -1,8 +1,8 @@
 use crate::gl;
 use crate::gl::types::*;
 use alacritty_terminal::term;
-//use alacritty_terminal::term::color::Rgb;
-//use log::*;
+// use alacritty_terminal::term::color::Rgb;
+// use log::*;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -416,7 +416,9 @@ declare_program! { ScreenShaderProgram,
         u_glyph_ref,
         u_cursor,
         u_cursor_color,
-        u_atlas_dim
+        u_atlas_dim,
+        u_main_pass,
+        u_background_opacity
     }
 }
 

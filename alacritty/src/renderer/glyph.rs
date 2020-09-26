@@ -198,7 +198,7 @@ impl GlyphCache {
                 let fallback_desc =
                     Self::make_desc(&Font::default().normal(), Slant::Normal, Weight::Normal);
                 rasterizer.load_font(&fallback_desc, size)
-            }
+            },
         }
     }
 
@@ -305,18 +305,34 @@ impl GlyphCache {
             .flat_map(|font| {
                 (32u8..=126u8)
                     .map(|c| {
-                        let glyph_key = GlyphKey { wide: false, zero_width: false, key: crossfont::GlyphKey { font_key: *font, c: c as char, size: font_size }};
+                        let glyph_key = GlyphKey {
+                            wide: false,
+                            zero_width: false,
+                            key: crossfont::GlyphKey {
+                                font_key: *font,
+                                c: c as char,
+                                size: font_size,
+                            },
+                        };
                         let glyph =
                             Self::rasterize_glyph(glyph_key, rasterizer, glyph_offset, metrics);
 
-                        atlas_cell_size.x = std::cmp::max( atlas_cell_size.x, glyph.rasterized.left + glyph.rasterized.width);
+                        atlas_cell_size.x = std::cmp::max(
+                            atlas_cell_size.x,
+                            glyph.rasterized.left + glyph.rasterized.width,
+                        );
                         atlas_cell_size.y = std::cmp::max(atlas_cell_size.y, glyph.rasterized.top);
 
-												atlas_cell_offset.x = std::cmp::max(atlas_cell_offset.x, -glyph.rasterized.left);
-                        atlas_cell_offset.y = std::cmp::max(atlas_cell_offset.y, glyph.rasterized.height - glyph.rasterized.top);
+                        atlas_cell_offset.x =
+                            std::cmp::max(atlas_cell_offset.x, -glyph.rasterized.left);
+                        atlas_cell_offset.y = std::cmp::max(
+                            atlas_cell_offset.y,
+                            glyph.rasterized.height - glyph.rasterized.top,
+                        );
 
                         debug!(
-                            "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell={:?} offset={:?}",
+                            "precomp: '{}' left={} top={} w={} h={} off={:?} atlas_cell={:?} \
+                             offset={:?}",
                             glyph.rasterized.c,
                             glyph.rasterized.left,
                             glyph.rasterized.top,

@@ -36,7 +36,7 @@ use crate::event::{Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, simple::SimpleRenderer, simple::RenderContext, GlyphCache};
+use crate::renderer::{self, simple::RenderContext, simple::SimpleRenderer, GlyphCache};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -260,7 +260,7 @@ impl Display {
 
         // Clear screen.
         let background_color = config.colors.primary.background;
-				renderer.clear(background_color, config.ui_config.background_opacity());
+        renderer.clear(background_color, config.ui_config.background_opacity());
 
         // Set subpixel anti-aliasing.
         #[cfg(target_os = "macos")]
@@ -274,7 +274,7 @@ impl Display {
         #[cfg(not(any(target_os = "macos", windows)))]
         if is_x11 {
             window.swap_buffers();
-						renderer.finish();
+            renderer.finish();
         }
 
         window.set_visible(true);
@@ -327,8 +327,8 @@ impl Display {
             info!("Initializing glyph cache...");
             let init_start = Instant::now();
 
-            let cache =
-                renderer.with_loader(|mut api| GlyphCache::new(rasterizer, config, &font, &mut api))?;
+            let cache = renderer
+                .with_loader(|mut api| GlyphCache::new(rasterizer, config, &font, &mut api))?;
 
             let stop = init_start.elapsed();
             let stop_f = stop.as_secs() as f64 + f64::from(stop.subsec_nanos()) / 1_000_000_000f64;
@@ -341,7 +341,7 @@ impl Display {
         // font metrics should be computed before creating the window in the first
         // place so that a resize is not needed.
         // FIXME get from glyph_cache
-				let (cw, ch) = GlyphCache::compute_cell_size(config, &glyph_cache.font_metrics());
+        let (cw, ch) = GlyphCache::compute_cell_size(config, &glyph_cache.font_metrics());
 
         Ok((glyph_cache, cw, ch))
     }
@@ -356,7 +356,8 @@ impl Display {
         });
 
         // Update cell size.
-        let (cell_width, cell_height) = GlyphCache::compute_cell_size(config, &self.glyph_cache.font_metrics());
+        let (cell_width, cell_height) =
+            GlyphCache::compute_cell_size(config, &self.glyph_cache.font_metrics());
         size_info.cell_width = cell_width;
         size_info.cell_height = cell_height;
     }
@@ -472,9 +473,9 @@ impl Display {
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
-				self.renderer.clear(background_color, config.ui_config.background_opacity());
+        self.renderer.clear(background_color, config.ui_config.background_opacity());
 
-				let mut render_context = self.renderer.begin(&config.ui_config, config.cursor, &size_info);
+        let mut render_context = self.renderer.begin(&config.ui_config, config.cursor, &size_info);
 
         let mut lines = RenderLines::new();
         let mut urls = Urls::new();
@@ -486,21 +487,21 @@ impl Display {
             #[cfg(feature = "dump-raw-render-timings")]
             let start = Instant::now();
 
-							// Iterate over all non-empty cells in the grid.
-							for cell in grid_cells {
-									// Update URL underlines.
-									urls.update(size_info.cols(), cell);
+            // Iterate over all non-empty cells in the grid.
+            for cell in grid_cells {
+                // Update URL underlines.
+                urls.update(size_info.cols(), cell);
 
-									// Update underline/strikeout.
-									lines.update(cell);
+                // Update underline/strikeout.
+                lines.update(cell);
 
-									// Draw the cell.
-									render_context.update_cell(cell, glyph_cache);
-							}
+                // Draw the cell.
+                render_context.update_cell(cell, glyph_cache);
+            }
 
             #[cfg(feature = "dump-raw-render-timings")]
             {
-								self.renderer.finish();
+                self.renderer.finish();
 
                 let dt = (Instant::now() - start).as_micros() as u32;
                 std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
@@ -533,17 +534,23 @@ impl Display {
             // Relay messages to the user.
             let fg = config.colors.primary.background;
             for (i, message_text) in text.iter().rev().enumerate() {
-                    render_context.render_string(
-                        glyph_cache,
-                        Line(size_info.lines().saturating_sub(i + 1)),
-                        &message_text,
-                        fg,
-                        None
-                    );
+                render_context.render_string(
+                    glyph_cache,
+                    Line(size_info.lines().saturating_sub(i + 1)),
+                    &message_text,
+                    fg,
+                    None,
+                );
             }
         }
 
-        Self::draw_render_timer(&mut self.glyph_cache, &mut render_context, config, &size_info, &self.meter);
+        Self::draw_render_timer(
+            &mut self.glyph_cache,
+            &mut render_context,
+            config,
+            &size_info,
+            &self.meter,
+        );
 
         // Handle search and IME positioning.
         let ime_position = match search_state.regex() {
@@ -556,7 +563,14 @@ impl Display {
                 let search_text = Self::format_search(&size_info, regex, search_label);
 
                 // Render the search bar.
-                Self::draw_search(&mut self.glyph_cache, &mut render_context, config, &size_info, message_bar_lines, &search_text);
+                Self::draw_search(
+                    &mut self.glyph_cache,
+                    &mut render_context,
+                    config,
+                    &size_info,
+                    message_bar_lines,
+                    &search_text,
+                );
 
                 // Compute IME position.
                 Point::new(size_info.lines() - 1, Column(search_text.len() - 1))
@@ -567,7 +581,7 @@ impl Display {
         // Update IME position.
         self.window.update_ime_position(ime_position, &self.size_info);
 
-				render_context.draw_grid_text();
+        render_context.draw_grid_text();
 
         let mut rects = lines.rects(&metrics, &size_info);
 
@@ -609,10 +623,10 @@ impl Display {
             rects.push(visual_bell_rect);
         }
 
-				// Draw rectangles.
-				render_context.draw_rects(&size_info, rects);
+        // Draw rectangles.
+        render_context.draw_rects(&size_info, rects);
 
-				drop(render_context);
+        drop(render_context);
 
         // Frame event should be requested before swaping buffers, since it requires surface
         // `commit`, which is done by swap buffers under the hood.
@@ -662,8 +676,8 @@ impl Display {
 
     /// Draw current search regex.
     fn draw_search(
-				glyph_cache: &mut GlyphCache,
-				render_context: &mut RenderContext,
+        glyph_cache: &mut GlyphCache,
+        render_context: &mut RenderContext,
         config: &Config,
         size_info: &SizeInfo,
         message_bar_lines: usize,
@@ -681,7 +695,13 @@ impl Display {
     }
 
     /// Draw render timer.
-    fn draw_render_timer(glyph_cache: &mut GlyphCache, render_context: &mut RenderContext, config: &Config, size_info: &SizeInfo, meter:&Meter) {
+    fn draw_render_timer(
+        glyph_cache: &mut GlyphCache,
+        render_context: &mut RenderContext,
+        config: &Config,
+        size_info: &SizeInfo,
+        meter: &Meter,
+    ) {
         if !config.ui_config.debug.render_timer {
             return;
         }

@@ -32,20 +32,20 @@ impl File {
             Ok(ref metadata) if metadata.is_file() => {
                 let metadata = Metadata::from(&metadata);
                 match self.metadata {
-                    Some(ref stored_metadata) if stored_metadata == &metadata => {}
+                    Some(ref stored_metadata) if stored_metadata == &metadata => {},
                     _ => match std::fs::read_to_string(&self.path) {
                         Ok(string) => {
                             eprintln!("Updated {:?}", &self.path);
                             self.metadata = Some(metadata);
                             return Some(string);
-                        }
+                        },
                         Err(err) => {
                             eprintln!("Error reading file '{:?}': '{}'", &self.path, err);
-                        }
+                        },
                     },
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         None

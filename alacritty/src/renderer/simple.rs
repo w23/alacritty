@@ -43,6 +43,7 @@ struct Grid {
 
     /// Screen worth of glyphs
     glyphs: Vec<GlyphRef>,
+    // FIXME mark as empty on clear and don't paint if it is empty
 }
 
 impl Grid {
@@ -86,7 +87,7 @@ struct QuadGlyphBatches {
 impl QuadGlyphBatches {
     fn new(index: usize) -> Self {
         Self { atlas: Atlas::new(index, 1024), batches: Vec::new() }
-        //glyphrect::Rectifier::new().unwrap() }
+        // glyphrect::Rectifier::new().unwrap() }
     }
 
     fn clear_atlas(&mut self) {
@@ -121,7 +122,8 @@ impl QuadGlyphBatches {
         }
 
         for batch in &mut self.batches {
-            // FIXME each of these draws will unnecessarily update lots of GL state that could be shared
+            // FIXME each of these draws will unnecessarily update lots of GL state that could be
+            // shared
             batch.draw(size_info);
         }
     }
@@ -141,6 +143,7 @@ pub struct SimpleRenderer {
     screen_glyphs_ref_tex: GLuint,
     screen_colors_fg_tex: GLuint,
     screen_colors_bg_tex: GLuint,
+    background_opacity: f32,
 
     program: ScreenShaderProgram,
     vao: GLuint,
@@ -198,6 +201,7 @@ impl SimpleRenderer {
 
             screen_colors_fg: Vec::new(),
             screen_colors_bg: Vec::new(),
+            background_opacity: 1.0,
 
             screen_glyphs_ref_tex,
             screen_colors_fg_tex,
@@ -276,7 +280,7 @@ impl SimpleRenderer {
         }
     }
 
-    fn paint(&mut self, size_info: &SizeInfo) {
+    fn draw_grid_passes(&mut self, size_info: &SizeInfo) {
         #[cfg(feature = "live-shader-reload")]
         {
             match self.program.poll() {
@@ -291,7 +295,14 @@ impl SimpleRenderer {
         }
 
         unsafe {
+            // Main pass blends glyphs on background manually in shader
+            // and it needs to write the final color onto framebuffer as-is
+            // so GL blending needs to be disabled
+            gl::Disable(gl::BLEND);
+
             gl::UseProgram(self.program.program.id);
+
+            gl::Uniform1f(self.program.u_background_opacity, self.background_opacity);
 
             self.program.set_term_uniforms(size_info);
             gl::Uniform1i(self.program.u_atlas, 0);
@@ -336,18 +347,20 @@ impl SimpleRenderer {
             gl::EnableVertexAttribArray(0);
         }
 
+        let mut main_pass = true;
         for grid in &self.grids {
             let atlas_dims = grid.atlas.cell_dims();
             unsafe {
                 gl::Uniform4f(
                     self.program.u_atlas_dim,
                     atlas_dims.offset.x as f32,
-                    //atlas_dims.offset.y as f32,
+                    // atlas_dims.offset.y as f32,
                     // Offset needs to be relative to "top" inverted-y OpenGL texture coords
                     (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
                     atlas_dims.size.x as f32,
                     atlas_dims.size.y as f32,
                 );
+                gl::Uniform1i(self.program.u_main_pass, main_pass as i32);
 
                 gl::ActiveTexture(gl::TEXTURE0);
                 gl::BindTexture(gl::TEXTURE_2D, grid.atlas.tex);
@@ -361,6 +374,14 @@ impl SimpleRenderer {
                     grid.glyphs.as_ptr() as *const _,
                 );
                 gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+            }
+
+            if main_pass {
+                unsafe {
+                    // All further passes need to blend with framebuffer color
+                    gl::Enable(gl::BLEND);
+                }
+                main_pass = false;
             }
         }
 
@@ -378,15 +399,10 @@ impl SimpleRenderer {
 
         self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 4]);
         self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b]);
+        self.background_opacity = background_opacity;
 
         unsafe {
-            let alpha = background_opacity;
-            gl::ClearColor(
-                (f32::from(color.r) / 255.0).min(1.0) * alpha,
-                (f32::from(color.g) / 255.0).min(1.0) * alpha,
-                (f32::from(color.b) / 255.0).min(1.0) * alpha,
-                alpha,
-            );
+            gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
         }
     }
@@ -560,8 +576,8 @@ impl<'a> RenderContext<'a> {
 
                     // FIXME how to draw this cursor
                     _ => {
-											trace!("FIXME Non-grid cursor is broken");
-										}
+                        trace!("FIXME Non-grid cursor is broken");
+                    }
                 }
             }
 
@@ -591,6 +607,10 @@ impl<'a> RenderContext<'a> {
                 self.this.screen_colors_fg[cell_index] =
                     [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
                 self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
+
+                if wide && cell.column.0 < self.this.columns {
+                    self.this.screen_colors_bg[cell_index + 1] = [cell.bg.r, cell.bg.g, cell.bg.b];
+                }
 
                 self.push_char(
                     GlyphKey {
@@ -714,7 +734,7 @@ impl<'a> RenderContext<'a> {
             self.this.grids.len(),
             self.this.quad_glyph_batches.len()
         );
-        self.this.paint(self.size_info);
+        self.this.draw_grid_passes(self.size_info);
         for batches in &mut self.this.quad_glyph_batches {
             batches.draw(self.size_info);
         }

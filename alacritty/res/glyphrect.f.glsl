@@ -10,7 +10,7 @@ flat in float flags;
 out vec4 FragColor;
 
 void main() {
-		FragColor = vec4(0.);
+		//FragColor = vec4(uv,0.,.4); return;
 		vec4 mask = texture(atlas, uv);
 		bool colored = flags > 0.;
 		if (colored) {

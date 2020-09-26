@@ -143,11 +143,11 @@ impl Rectifier {
             match self.program.poll() {
                 Err(e) => {
                     error!("shader error: {}", e);
-                }
+                },
                 Ok(updated) if updated => {
                     debug!("updated shader: {:?}", self.program);
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
