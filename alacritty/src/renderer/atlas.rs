@@ -72,7 +72,7 @@ impl GridAtlas {
     }
 
     pub fn insert(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
-        if self.free_line >= self.cell_size.y {
+        if self.free_line >= self.grid_size.y {
             return Err(AtlasInsertError::Full);
         }
 
