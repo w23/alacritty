@@ -170,7 +170,8 @@ impl SimpleRenderer {
         let mut vbo: GLuint = 0;
 
         unsafe {
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            //gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
 
             gl::DepthMask(gl::FALSE);
 
@@ -380,6 +381,7 @@ impl SimpleRenderer {
                 unsafe {
                     // All further passes need to blend with framebuffer color
                     gl::Enable(gl::BLEND);
+                    gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
                 }
                 main_pass = false;
             }
