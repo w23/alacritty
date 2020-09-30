@@ -577,9 +577,19 @@ impl<'a> RenderContext<'a> {
                         );
                     }
 
-                    // FIXME how to draw this cursor
-                    _ => {
-                        trace!("FIXME Non-grid cursor is broken");
+                    AtlasRef::Free(free) => {
+                        let glyph_rect = glyphrect::GlyphRect {
+                            pos: Vec2::<i16> {
+                                x: cell.column.0 as i16 * self.size_info.cell_width as i16,
+                                y: cell.line.0 as i16 * self.size_info.cell_height as i16,
+                            },
+                            geom: free,
+                            fg: cell.fg,
+                            colored: glyph.colored,
+                        };
+
+                        self.this.quad_glyph_batches[glyph.atlas_index]
+                            .add(self.size_info, &glyph_rect);
                     }
                 }
             }
