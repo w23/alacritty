@@ -14,19 +14,23 @@ uniform vec3 u_cursor_color;
 uniform bool u_main_pass;
 uniform float u_background_opacity;
 
-vec4 getGlyphPixel(vec4 glyph, vec2 cell_pix, vec3 fg, out vec3 alpha_mask) {
-	vec2 atlas_pix = glyph.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
-	vec4 mask = texture(u_atlas, atlas_pix / vec2(textureSize(u_atlas, 0)));
+vec4 blendGlyphPixel(vec4 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
+	vec2 atlas_pix = glyph_ref.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
+	vec4 glyph = texture(u_atlas, atlas_pix / vec2(textureSize(u_atlas, 0)));
+	vec3 mask;
 
-	// Colored glyph (e.g. emoji)
-	if (glyph.z > 0.) {
-		alpha_mask = vec3(mask.a);
-		return vec4(mask.rgb/mask.a, mask.a);
+	if (glyph_ref.z > 0.) {
+		// Colored glyph (e.g. emoji)
+		mask = vec3(glyph.a);
+		glyph.rgb /= glyph.a;
+	} else {
+		// Regular non-colored glyph
+		mask = glyph.rgb;
+		// TODO is there a better way to alpha than just r
+		glyph.a = glyph.r;
 	}
 
-	// Regular non-colored glyph
-	alpha_mask = mask.rgb;
-	return mask.rgbr; // TODO is there a better way to alpha than just r
+	return vec4(mix(dst.rgb, fg, mask.rgb), color.a + glyph.a);
 }
 
 void main() {
@@ -56,8 +60,7 @@ void main() {
 		color = vec4(bg, u_background_opacity);
 		vec3 mask;
 		if (cell == u_cursor.xy) {
-			vec4 pix = getGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, mask);
-			color = vec4(mix(color.rgb, fg, mask.rgb), color.a + pix.a);
+			color = blendGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, color);
 		}
 	} else {
 		color = vec4(0.);
@@ -70,28 +73,12 @@ void main() {
 	/* 		return; */
 	/* } */
 
-	vec3 mask;
-	vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix, fg, mask);
-	color = vec4(mix(color.rgb, fg, mask.rgb), color.a + pixel.a);
+	// This cell glyph
+	color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix, fg, color);
 
-	/* if (cell_pix.y > (u_cell_dim.y - u_atlas_dim.y) && cell.y < (screen_cells.y-1.)) { */
-	/* 	vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells; */
-	/* 	vec4 glyph = texture(u_glyph_ref, tuv); */
-	/* 	vec3 fg = texture(u_color_fg, tuv).rgb; */
-	/* 	vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -u_cell_dim.y), fg); */
-	/* 	//color.g = 1.; */
-	/* 	color = mix(color, pixel, pixel.a); */
-	/* } */
-  /*  */
-	/* if (cell_pix.x < (u_atlas_dim.z - u_cell_dim.x) && cell.x > 0.) { */
-	/* 	vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells; */
-	/* 	vec4 glyph = texture(u_glyph_ref, tuv); */
-	/* 	vec3 fg = texture(u_color_fg, tuv).rgb; */
-	/* 	vec3 bg = texture(u_color_bg, tuv).rgb; */
-	/* 	vec4 pixel = getGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), fg); */
-	/* 	//color.b = 1.; */
-	/* 	color = mix(color, pixel, pixel.a); */
-	/* } */
+	// Neighbour cells overlappery
+	// TODO: glyph-level (outside shader) masking for these cases so that we only check some bits
+	// instead of brute-forcing all cases
 
 	// TODO:
 	// -, +
@@ -102,8 +89,22 @@ void main() {
 	// 0, -
 	// +, -
 
-	// TODO: glyph-level (outside shader) masking for these cases so that we only check some bits
-	// instead of brute-forcing all cases
+	if (cell_pix.y > (u_cell_dim.y - u_atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
+		vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells;
+		vec4 glyph = texture(u_glyph_ref, tuv);
+		vec3 fg = texture(u_color_fg, tuv).rgb;
+		color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -u_cell_dim.y), fg, color);
+		//color.g = 1.;
+	}
+
+	if (cell_pix.x < (u_atlas_dim.z - u_cell_dim.x) && cell.x > 0.) {
+		vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells;
+		vec4 glyph = texture(u_glyph_ref, tuv);
+		vec3 fg = texture(u_color_fg, tuv).rgb;
+		vec3 bg = texture(u_color_bg, tuv).rgb;
+		color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), fg, color);
+		//color.b = 1.;
+	}
 
 	//color = vec4(fg.rgb, 1.);
 	//color = vec4(bg.rgb, 1.);
