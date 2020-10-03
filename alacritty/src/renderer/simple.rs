@@ -223,14 +223,7 @@ impl SimpleRenderer {
         })
     }
 
-    pub fn set_cursor(
-        &mut self,
-        column: usize,
-        line: usize,
-        glyph_x: f32,
-        glyph_y: f32,
-        color: Rgb,
-    ) {
+    pub fn set_cursor(&mut self, column: i32, line: i32, glyph_x: f32, glyph_y: f32, color: Rgb) {
         self.cursor_cell = [column as f32, line as f32];
         self.cursor_glyph = [glyph_x, glyph_y];
         self.cursor_color = color;
@@ -245,6 +238,7 @@ impl SimpleRenderer {
         for batches in &mut self.quad_glyph_batches {
             batches.clear();
         }
+        self.set_cursor(-1, -1, 0.0, 0.0, Rgb { r: 0, g: 0, b: 0 });
         RenderContext { this: self, size_info, config, cursor_config }
     }
 
@@ -569,8 +563,8 @@ impl<'a> RenderContext<'a> {
                 match glyph.atlas_ref {
                     AtlasRef::Grid(grid) => {
                         self.this.set_cursor(
-                            cell.column.0,
-                            cell.line.0,
+                            cell.column.0 as i32,
+                            cell.line.0 as i32,
                             grid.column as f32,
                             grid.line as f32,
                             cell.fg,
