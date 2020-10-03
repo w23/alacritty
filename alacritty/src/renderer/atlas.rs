@@ -84,12 +84,12 @@ impl GridAtlas {
         //   |                |
         //   |    .------.<---+---- rasterized glyph bbox (width, height)
         //   |    |  ##  |    |^
-        //   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped on screen w/o
-        // overlap (not really used in atlas explicitly)   |  . |#    #| .  ||
+        //   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped
+        //   |  . |#    #| .  ||     on screen w/o overlap (not really used in atlas explicitly)
         //   |  . |######| .  ||--- rasterized.top, relative to baseline/origin.y
         //   |  . |#    #| .  ||
         //   |  . |#    #| .  ||
-        //   |  . '------'-.  |v
+        //   |  . '------' .  |v
         //   |  . . . . . . --+--- baseline
         //   |  ^             |
         //   |  |             |
@@ -128,8 +128,8 @@ impl GridAtlas {
             || off_x + rasterized.width > self.cell_size.x
             || off_y + rasterized.height > self.cell_size.y
         {
-            trace!(
-                "FIXME: glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
+            debug!(
+                "glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
                 rasterized.c,
                 rasterized.left,
                 rasterized.top,
