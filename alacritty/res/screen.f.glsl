@@ -12,7 +12,6 @@ uniform vec4 u_atlas_dim; // .xy = offset, .zw = cell_size
 uniform vec4 u_cursor;
 uniform vec3 u_cursor_color;
 uniform bool u_main_pass;
-uniform float u_background_opacity;
 
 vec4 blendGlyphPixel(vec4 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
 	vec2 atlas_pix = glyph_ref.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
@@ -51,13 +50,13 @@ void main() {
 	vec2 tuv = (cell + .5) / screen_cells;
 	vec4 glyph = texture(u_glyph_ref, tuv);
 	vec3 fg = texture(u_color_fg, tuv).rgb;
-	vec3 bg = texture(u_color_bg, tuv).rgb;
+	vec4 bg = texture(u_color_bg, tuv);
 	vec2 cell_pix = mod(uv, u_cell_dim);
 
 	bool empty = (glyph.xy == vec2(0.));
 
 	if (u_main_pass) {
-		color = vec4(bg, u_background_opacity);
+		color = bg;
 		vec3 mask;
 		if (cell == u_cursor.xy) {
 			color = blendGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, color);
@@ -101,7 +100,6 @@ void main() {
 		vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells;
 		vec4 glyph = texture(u_glyph_ref, tuv);
 		vec3 fg = texture(u_color_fg, tuv).rgb;
-		vec3 bg = texture(u_color_bg, tuv).rgb;
 		color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), fg, color);
 		//color.b = 1.;
 	}

@@ -136,14 +136,14 @@ pub struct SimpleRenderer {
     cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
 
-    screen_colors_fg: Vec<[u8; 4]>,
-    screen_colors_bg: Vec<[u8; 3]>,
+    screen_colors_fg: Vec<[u8; 3]>,
+    screen_colors_bg: Vec<[u8; 4]>,
+    bg_alpha: u8,
 
     // Texture that stores glyph->atlas references for the entire screen
     screen_glyphs_ref_tex: GLuint,
     screen_colors_fg_tex: GLuint,
     screen_colors_bg_tex: GLuint,
-    background_opacity: f32,
 
     program: ScreenShaderProgram,
     vao: GLuint,
@@ -202,7 +202,7 @@ impl SimpleRenderer {
 
             screen_colors_fg: Vec::new(),
             screen_colors_bg: Vec::new(),
-            background_opacity: 1.0,
+            bg_alpha: 255,
 
             screen_glyphs_ref_tex,
             screen_colors_fg_tex,
@@ -267,8 +267,8 @@ impl SimpleRenderer {
         self.lines = size.lines().0;
         let cells = self.columns * self.lines;
 
-        self.screen_colors_bg.resize(cells, [0u8; 3]);
-        self.screen_colors_fg.resize(cells, [0u8; 4]);
+        self.screen_colors_bg.resize(cells, [0u8; 4]);
+        self.screen_colors_fg.resize(cells, [0u8; 3]);
 
         for grid in &mut self.grids {
             grid.resize(self.columns, self.lines);
@@ -297,8 +297,6 @@ impl SimpleRenderer {
 
             gl::UseProgram(self.program.program.id);
 
-            gl::Uniform1f(self.program.u_background_opacity, self.background_opacity);
-
             self.program.set_term_uniforms(size_info);
             gl::Uniform1i(self.program.u_atlas, 0);
             gl::Uniform1i(self.program.u_glyph_ref, 1);
@@ -323,7 +321,7 @@ impl SimpleRenderer {
             upload_texture(
                 self.columns as i32,
                 self.lines as i32,
-                PixelFormat::RGBA8,
+                PixelFormat::RGB8,
                 self.screen_colors_fg.as_ptr() as *const _,
             );
 
@@ -332,7 +330,7 @@ impl SimpleRenderer {
             upload_texture(
                 self.columns as i32,
                 self.lines as i32,
-                PixelFormat::RGB8,
+                PixelFormat::RGBA8,
                 self.screen_colors_bg.as_ptr() as *const _,
             );
 
@@ -394,9 +392,10 @@ impl SimpleRenderer {
             grid.clear_grid();
         }
 
-        self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 4]);
-        self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b]);
-        self.background_opacity = background_opacity;
+        self.bg_alpha = (background_opacity * 255.0) as u8;
+        let bg_alpha = self.bg_alpha;
+        self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 3]);
+        self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b, bg_alpha]);
 
         unsafe {
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
@@ -611,12 +610,24 @@ impl<'a> RenderContext<'a> {
                 }
 
                 let cell_index = cell.line.0 * self.this.columns + cell.column.0;
-                self.this.screen_colors_fg[cell_index] =
-                    [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
-                self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
+
+                // TODO this should probably be not like this
+                // but anyway, cell.bg_alpha has the following semantics in original renderer:
+                // 0 == empty cell or regular background color with alpha set to opacity from config
+                // 1 == some other background color that is not the default one
+                // Non-default bg colors should likely also be transparent, see https://github.com/alacritty/alacritty/pull/4196
+                let bg_alpha = if cell.bg_alpha == 0.0 {
+                    self.this.bg_alpha
+                } else {
+                    (cell.bg_alpha * 255.0) as u8
+                };
+                self.this.screen_colors_fg[cell_index] = [cell.fg.r, cell.fg.g, cell.fg.b];
+                self.this.screen_colors_bg[cell_index] =
+                    [cell.bg.r, cell.bg.g, cell.bg.b, bg_alpha];
 
                 if wide && cell.column.0 < self.this.columns {
-                    self.this.screen_colors_bg[cell_index + 1] = [cell.bg.r, cell.bg.g, cell.bg.b];
+                    self.this.screen_colors_bg[cell_index + 1] =
+                        [cell.bg.r, cell.bg.g, cell.bg.b, bg_alpha];
                 }
 
                 self.push_char(
@@ -634,19 +645,6 @@ impl<'a> RenderContext<'a> {
                     cell_index,
                     false,
                 );
-
-                // if wide && cell.column.0 < self.this.columns {
-                //     let cell_index = cell_index + 1;
-                //     self.this.screen_glyphs_ref[cell_index] = GlyphRef {
-                //         x: glyph.uv_left as u8 + 1,
-                //         y: glyph.uv_bot as u8,
-                //         z: glyph.colored as u8,
-                //         w: 0,
-                //     };
-                //     self.this.screen_colors_fg[cell_index] =
-                //         [cell.fg.r, cell.fg.g, cell.fg.b, (cell.bg_alpha * 255.0) as u8];
-                //     self.this.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b];
-                // }
 
                 // Render zero-width characters.
                 for c in (&chars[1..]).iter().filter(|c| **c != ' ') {

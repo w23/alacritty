@@ -417,8 +417,7 @@ declare_program! { ScreenShaderProgram,
         u_cursor,
         u_cursor_color,
         u_atlas_dim,
-        u_main_pass,
-        u_background_opacity
+        u_main_pass
     }
 }
 
