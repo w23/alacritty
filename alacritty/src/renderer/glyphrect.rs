@@ -1,4 +1,5 @@
-use super::glyph::AtlasRefFree;
+use super::atlas::{Atlas, AtlasInsertError};
+use super::glyph::{AtlasRefFree, Glyph, RasterizedGlyph};
 use super::math::*;
 use super::shade::GlyphRectShaderProgram;
 use crate::gl;
@@ -16,11 +17,179 @@ pub enum RectAddError {
     Full,
 }
 
-pub struct GlyphRect {
+pub struct GlyphQuad {
+    pub atlas_index: usize,
     pub pos: Vec2<i16>,
     pub geom: AtlasRefFree,
     pub fg: alacritty_terminal::term::color::Rgb,
     pub colored: bool,
+}
+
+#[derive(Debug)]
+pub struct QuadGlyphRenderer {
+    program: GlyphRectShaderProgram,
+    atlas_groups: Vec<AtlasGroup>,
+}
+
+impl QuadGlyphRenderer {
+    pub fn new() -> Self {
+        Self { atlas_groups: Vec::new(), program: GlyphRectShaderProgram::new().unwrap() }
+    }
+
+    pub fn clear_atlas(&mut self) {
+        for group in &mut self.atlas_groups {
+            group.clear_atlas();
+        }
+    }
+
+    pub fn clear(&mut self) {
+        for group in &mut self.atlas_groups {
+            group.clear();
+        }
+    }
+
+    pub fn insert_into_atlas(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+        for group in &mut self.atlas_groups {
+            match group.atlas.insert(rasterized) {
+                Ok(glyph) => {
+                    return glyph;
+                }
+                Err(AtlasInsertError::GlyphTooLarge) => {
+                    panic!("FIXME handle this by returning dummy 0 glyph");
+                }
+                Err(AtlasInsertError::Full) => {}
+            }
+        }
+
+        self.atlas_groups.push(AtlasGroup::new(self.atlas_groups.len()));
+        match self.atlas_groups.last_mut().unwrap().atlas.insert(rasterized) {
+            Ok(glyph) => glyph,
+            Err(AtlasInsertError::GlyphTooLarge) => {
+                panic!("FIXME handle this by returning dummy 0 glyph");
+            }
+            Err(AtlasInsertError::Full) => {
+                panic!("New atlas is already full?!");
+            }
+        }
+    }
+
+    pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) {
+        self.atlas_groups[glyph.atlas_index].add(size_info, glyph);
+    }
+
+    pub fn draw(&mut self, size_info: &SizeInfo) {
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                }
+                Ok(updated) if updated => {
+                    debug!("updated shader: {:?}", self.program);
+                }
+                _ => {}
+            }
+        }
+
+        // Swap to rectangle rendering program.
+        unsafe {
+            // Add padding to viewport
+            let pad_x = size_info.padding_x as i32;
+            let pad_y = size_info.padding_y as i32;
+            let width = size_info.width as i32 - 2 * pad_x;
+            let height = size_info.height as i32 - 2 * pad_y;
+            gl::Viewport(pad_x, pad_y, width, height);
+
+            // Swap program.
+            gl::UseProgram(self.program.program.id);
+
+            // FIXME expect atlas to be bound at 0
+            gl::Uniform1i(self.program.u_atlas, 0);
+            gl::Uniform2f(self.program.u_scale, 2.0 / width as f32, -2.0 / height as f32);
+
+            // Change blending strategy.
+            gl::Enable(gl::BLEND);
+            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+
+            // Atlas will be bound to slot 0
+            gl::ActiveTexture(gl::TEXTURE0);
+        }
+
+        for group in &mut self.atlas_groups {
+            group.draw(size_info);
+        }
+
+        // FIXME should we really do this?
+        // maybe whoever needs some specific gl state can set it themselves?
+        unsafe {
+            // Deactivate rectangle program again.
+            // Reset blending strategy.
+            gl::Disable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
+
+            // Reset data and buffers.
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            // FIXME ??? track viewport wrt padding properly everywhere
+            let padding_x = size_info.padding_x as i32;
+            let padding_y = size_info.padding_y as i32;
+            let width = size_info.width as i32;
+            let height = size_info.height as i32;
+            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
+
+            // Disable program.
+            gl::UseProgram(0);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AtlasGroup {
+    atlas: Atlas,
+    batches: Vec<Batch>,
+}
+
+impl AtlasGroup {
+    fn new(index: usize) -> Self {
+        Self { atlas: Atlas::new(index, 1024), batches: Vec::new() }
+    }
+
+    fn clear_atlas(&mut self) {
+        self.atlas.clear();
+    }
+
+    fn clear(&mut self) {
+        for batch in &mut self.batches {
+            batch.clear();
+        }
+    }
+
+    fn add(&mut self, size_info: &SizeInfo, glyph_rect: &GlyphQuad) {
+        loop {
+            if !self.batches.is_empty() {
+                match self.batches.last_mut().unwrap().add(size_info, glyph_rect) {
+                    Ok(_) => {
+                        return;
+                    }
+                    Err(RectAddError::Full) => {}
+                }
+            }
+
+            self.batches.push(Batch::new().unwrap());
+        }
+    }
+
+    fn draw(&mut self, size_info: &SizeInfo) {
+        unsafe {
+            // Binding to active slot 0
+            gl::BindTexture(gl::TEXTURE_2D, self.atlas.id);
+        }
+
+        for batch in &mut self.batches {
+            batch.draw(size_info);
+        }
+    }
 }
 
 #[repr(C)]
@@ -49,17 +218,16 @@ struct Vertex {
 }
 
 #[derive(Debug)]
-pub struct Rectifier {
+struct Batch {
     vao: GLuint,
     vbo: GLuint,
     ebo: GLuint,
-    program: GlyphRectShaderProgram,
     indices: Vec<u16>,
     vertices: Vec<Vertex>,
 }
 
-impl Rectifier {
-    pub fn new() -> Result<Self, Error> {
+impl Batch {
+    fn new() -> Result<Self, Error> {
         let mut vao: GLuint = 0;
         let mut vbo: GLuint = 0;
         let mut ebo: GLuint = 0;
@@ -70,14 +238,7 @@ impl Rectifier {
             gl::GenBuffers(1, &mut ebo);
         }
 
-        Ok(Self {
-            vao,
-            vbo,
-            ebo,
-            program: GlyphRectShaderProgram::new()?,
-            indices: Vec::new(),
-            vertices: Vec::new(),
-        })
+        Ok(Self { vao, vbo, ebo, indices: Vec::new(), vertices: Vec::new() })
     }
 
     pub fn clear(&mut self) {
@@ -85,7 +246,7 @@ impl Rectifier {
         self.vertices.clear();
     }
 
-    pub fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphRect) -> Result<(), RectAddError> {
+    pub fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) -> Result<(), RectAddError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);
@@ -138,43 +299,11 @@ impl Rectifier {
     }
 
     pub fn draw(&mut self, size_info: &SizeInfo) {
-        #[cfg(feature = "live-shader-reload")]
-        {
-            match self.program.poll() {
-                Err(e) => {
-                    error!("shader error: {}", e);
-                },
-                Ok(updated) if updated => {
-                    debug!("updated shader: {:?}", self.program);
-                },
-                _ => {},
-            }
-        }
-
         if self.indices.is_empty() {
             return;
         }
 
-        // Swap to rectangle rendering program.
         unsafe {
-            // Add padding to viewport
-            let pad_x = size_info.padding_x as i32;
-            let pad_y = size_info.padding_y as i32;
-            let width = size_info.width as i32 - 2 * pad_x;
-            let height = size_info.height as i32 - 2 * pad_y;
-            gl::Viewport(pad_x, pad_y, width, height);
-
-            // Swap program.
-            gl::UseProgram(self.program.program.id);
-
-            // FIXME expect atlas to be bound at 0
-            gl::Uniform1i(self.program.u_atlas, 0);
-            gl::Uniform2f(self.program.u_scale, 2.0 / width as f32, -2.0 / height as f32);
-
-            // Change blending strategy.
-            gl::Enable(gl::BLEND);
-            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
             // Setup data and buffers.
             gl::BindVertexArray(self.vao);
 
@@ -244,25 +373,6 @@ impl Rectifier {
                 gl::UNSIGNED_SHORT,
                 ptr::null(),
             );
-
-            // Deactivate rectangle program again.
-            // Reset blending strategy.
-            gl::Disable(gl::BLEND);
-            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            // FIXME ??? track viewport wrt padding properly everywhere
-            let padding_x = size_info.padding_x as i32;
-            let padding_y = size_info.padding_y as i32;
-            let width = size_info.width as i32;
-            let height = size_info.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
         }
     }
 }
