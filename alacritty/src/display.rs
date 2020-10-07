@@ -473,6 +473,9 @@ impl Display {
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
+				#[cfg(feature = "dump-raw-render-timings")]
+				let start = Instant::now();
+
         self.renderer.clear(background_color, config.ui_config.background_opacity());
 
         let mut render_context = self.renderer.begin(&config.ui_config, config.cursor, &size_info);
@@ -483,9 +486,6 @@ impl Display {
         // Draw grid.
         {
             let _sampler = self.meter.sampler();
-
-            #[cfg(feature = "dump-raw-render-timings")]
-            let start = Instant::now();
 
             // Iterate over all non-empty cells in the grid.
             for cell in grid_cells {
@@ -499,13 +499,6 @@ impl Display {
                 render_context.update_cell(cell, glyph_cache);
             }
 
-            #[cfg(feature = "dump-raw-render-timings")]
-            {
-                self.renderer.finish();
-
-                let dt = (Instant::now() - start).as_micros() as u32;
-                std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
-            }
         }
 
         let mut message_bar_lines = 0;
@@ -628,12 +621,18 @@ impl Display {
 
         drop(render_context);
 
+				#[cfg(feature = "dump-raw-render-timings")]
+				{
+						self.renderer.finish();
+
+						let dt = (Instant::now() - start).as_micros() as u32;
+						std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
+				}
+
         // Frame event should be requested before swaping buffers, since it requires surface
         // `commit`, which is done by swap buffers under the hood.
         #[cfg(not(any(target_os = "macos", windows)))]
         self.request_frame(&self.window);
-
-        self.window.swap_buffers();
 
         #[cfg(not(any(target_os = "macos", windows)))]
         if self.is_x11 {
@@ -642,6 +641,8 @@ impl Display {
             // permanent one frame delay.
             self.renderer.finish();
         }
+
+        self.window.swap_buffers();
     }
 
     /// Format search regex to account for the cursor and fullwidth characters.
