@@ -5,7 +5,7 @@ use crate::gl;
 use crate::gl::types::*;
 use crossfont::BitmapBuffer;
 
-use super::glyph::{AtlasRef, AtlasRefFree, AtlasRefGrid, Glyph, RasterizedGlyph};
+use super::glyph::{AtlasRef, AtlasRefFree, AtlasRefGrid, Glyph, GridOverflow, RasterizedGlyph};
 use super::math::*;
 use super::texture::*;
 
@@ -33,6 +33,7 @@ pub struct GridAtlas {
     pub tex: GLuint,
     index: usize,
     cell_size: Vec2<i32>,
+    atlas_cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
     grid_size: Vec2<i32>,
     half_padding: Vec2<i32>,
@@ -41,10 +42,15 @@ pub struct GridAtlas {
 }
 
 impl GridAtlas {
-    pub fn new(index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
+    pub fn new(
+        index: usize,
+        cell_size: Vec2<i32>,
+        atlas_cell_size: Vec2<i32>,
+        cell_offset: Vec2<i32>,
+    ) -> Self {
         // FIXME limit atlas size by 256x256 cells
 
-        let atlas_cell_size = cell_size + cell_offset;
+        let atlas_cell_size = atlas_cell_size + cell_offset;
         let padding = (atlas_cell_size * GRID_ATLAS_PAD_PCT + 99) / 100;
         let half_padding = padding / 2;
         let cell_offset = cell_offset + half_padding;
@@ -55,7 +61,8 @@ impl GridAtlas {
         let ret = Self {
             index,
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
-            cell_size: atlas_cell_size,
+            cell_size,
+            atlas_cell_size,
             cell_offset,
             half_padding,
             grid_size: Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size,
@@ -67,7 +74,7 @@ impl GridAtlas {
     }
 
     pub fn cell_dims(&self) -> CellDims {
-        CellDims { offset: self.cell_offset, size: self.cell_size }
+        CellDims { offset: self.cell_offset, size: self.atlas_cell_size }
     }
 
     pub fn insert(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
@@ -80,7 +87,7 @@ impl GridAtlas {
         let column = self.free_column;
 
         // Atlas cell metrics in logical glyph space
-        //   .----------------.<-- single glyph cell in atlas texture (self.cell_size)
+        //   .----------------.<-- single glyph cell in atlas texture (self.atlas_cell_size)
         //   |                |
         //   |    .------.<---+---- rasterized glyph bbox (width, height)
         //   |    |  ##  |    |^
@@ -102,7 +109,7 @@ impl GridAtlas {
         //
         //   .----------------.-------
         //   |                |^   ^
-        //   |  . . . . . .   ||---+-- self.cell_size.y
+        //   |  . . . . . .   ||---+-- self.atlas_cell_size.y
         //   |  . .------.-.--++---|
         //   |  . |#    #| .  || ^ |
         //   |  . |#    #| .  || | |
@@ -111,22 +118,40 @@ impl GridAtlas {
         //   |  . | #  # | .  || | |-- rasterized.top
         //   |    |  ##  |    || v v
         //   |    '------'----|+-----.
-        //   |                |v      } offset.y = self.cell_size.y - rasterized.top
+        //   |                |v      } offset.y = self.atlas_cell_size.y - rasterized.top
         //   '----------------'------`
         //   ^
         //   `- atlas cell texture origin (0, 0)
         //
 
         let off_x = self.cell_offset.x + rasterized.left;
-        let off_y = self.cell_size.y - rasterized.top - self.half_padding.y;
+        let off_y = self.atlas_cell_size.y - rasterized.top - self.half_padding.y;
 
-        let tex_x = off_x + column * self.cell_size.x;
-        let tex_y = off_y + line * self.cell_size.y;
+        let tex_x = off_x + column * self.atlas_cell_size.x;
+        let tex_y = off_y + line * self.atlas_cell_size.y;
+
+        let overflow: GridOverflow =
+            if rasterized.left < 0 { GridOverflow::LEFT } else { GridOverflow::NONE }
+                | if rasterized.left + rasterized.width > self.cell_size.x {
+                    GridOverflow::RIGHT
+                } else {
+                    GridOverflow::NONE
+                }
+                | if rasterized.top > self.cell_size.y {
+                    GridOverflow::TOP
+                } else {
+                    GridOverflow::NONE
+                }
+                | if rasterized.top - rasterized.height < 0 {
+                    GridOverflow::BOTTOM
+                } else {
+                    GridOverflow::NONE
+                };
 
         if off_x < 0
             || off_y < 0
-            || off_x + rasterized.width > self.cell_size.x
-            || off_y + rasterized.height > self.cell_size.y
+            || off_x + rasterized.width > self.atlas_cell_size.x
+            || off_y + rasterized.height > self.atlas_cell_size.y
         {
             debug!(
                 "glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
@@ -135,7 +160,7 @@ impl GridAtlas {
                 rasterized.top,
                 rasterized.width,
                 rasterized.height,
-                self.cell_size,
+                self.atlas_cell_size,
                 self.cell_offset,
             );
 
@@ -169,8 +194,8 @@ impl GridAtlas {
                 std::cmp::max(0, tex_x), // FIXME
                 std::cmp::max(0, tex_y), // FIXME
                 rasterized.width,        // FIXME limit width with stride
-                // std::cmp::min(rasterized.width, self.cell_size.x),
-                std::cmp::min(rasterized.height, self.cell_size.y),
+                // std::cmp::min(rasterized.width, self.atlas_cell_size.x),
+                std::cmp::min(rasterized.height, self.atlas_cell_size.y),
                 format,
                 gl::UNSIGNED_BYTE,
                 buf.as_ptr() as *const _,
@@ -180,7 +205,7 @@ impl GridAtlas {
         }
 
         debug!(
-            "'{}' {},{} {}x{} {},{} => l={} c={} {},{}",
+            "'{}' {},{} {}x{} {},{} => l={} c={} {},{} {:?}",
             rasterized.c,
             rasterized.left,
             rasterized.top,
@@ -192,6 +217,7 @@ impl GridAtlas {
             column,
             tex_x,
             tex_y,
+            overflow,
         );
 
         self.free_column += 1;
@@ -205,7 +231,7 @@ impl GridAtlas {
         Ok(Glyph {
             atlas_index: self.index,
             colored,
-            atlas_ref: AtlasRef::Grid(AtlasRefGrid { line, column }),
+            atlas_ref: AtlasRef::Grid(AtlasRefGrid { line, column, overflow }),
         })
     }
 }

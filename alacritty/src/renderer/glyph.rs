@@ -32,13 +32,24 @@ pub trait LoadGlyph {
     /// Clear any state accumulated from previous loaded glyphs.
     ///
     /// This can, for instance, be used to reset the texture Atlas.
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>);
+    fn clear(&mut self, cell_size: Vec2<i32>, atlas_cell_size: Vec2<i32>, cell_offset: Vec2<i32>);
+}
+
+bitflags! {
+    pub struct GridOverflow: u8 {
+        const NONE = 0;
+        const LEFT = 0b0001;
+        const RIGHT = 0b0010;
+        const TOP = 0b0100;
+        const BOTTOM = 0b1000;
+    }
 }
 
 #[derive(Copy, Debug, Clone)]
 pub struct AtlasRefGrid {
     pub line: u16,
     pub column: u16,
+    pub overflow: GridOverflow,
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -198,7 +209,7 @@ impl GlyphCache {
                 let fallback_desc =
                     Self::make_desc(&Font::default().normal(), Slant::Normal, Weight::Normal);
                 rasterizer.load_font(&fallback_desc, size)
-            },
+            }
         }
     }
 
@@ -351,7 +362,7 @@ impl GlyphCache {
 
         info!("Max glyph size: {:?}", cell_size);
 
-        loader.clear(atlas_cell_size, atlas_cell_offset);
+        loader.clear(cell_size, atlas_cell_size, atlas_cell_offset);
 
         for glyph in glyphs {
             self.cache.entry(glyph.0).or_insert_with(|| loader.load_glyph(&glyph.1));

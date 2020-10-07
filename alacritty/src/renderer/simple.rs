@@ -22,7 +22,7 @@ use {
 use alacritty_terminal::config::Cursor;
 
 use super::atlas::{AtlasInsertError, GridAtlas};
-use super::glyph::{AtlasRef, Glyph, GlyphKey, RasterizedGlyph};
+use super::glyph::{AtlasRef, Glyph, GlyphKey, GridOverflow, RasterizedGlyph};
 use super::glyphrect::{GlyphQuad, QuadGlyphRenderer};
 use super::math::*;
 use super::shade::*;
@@ -52,11 +52,12 @@ impl Grid {
         columns: usize,
         lines: usize,
         cell_size: Vec2<i32>,
+        atlas_cell_size: Vec2<i32>,
         cell_offset: Vec2<i32>,
     ) -> Self {
         let cells = columns * lines;
         Self {
-            atlas: GridAtlas::new(index, cell_size, cell_offset),
+            atlas: GridAtlas::new(index, cell_size, atlas_cell_size, cell_offset),
             glyphs: vec![GlyphRef { x: 0, y: 0, z: 0, w: 0 }; cells],
         }
     }
@@ -66,8 +67,14 @@ impl Grid {
         self.glyphs.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
     }
 
-    fn clear_atlas(&mut self, index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        self.atlas = GridAtlas::new(index, cell_size, cell_offset);
+    fn clear_atlas(
+        &mut self,
+        index: usize,
+        cell_size: Vec2<i32>,
+        atlas_cell_size: Vec2<i32>,
+        cell_offset: Vec2<i32>,
+    ) {
+        self.atlas = GridAtlas::new(index, cell_size, atlas_cell_size, cell_offset);
         self.glyphs.clear();
     }
 
@@ -81,6 +88,7 @@ pub struct SimpleRenderer {
     grids: Vec<Grid>,
 
     cell_size: Vec2<i32>,
+    atlas_cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
 
     screen_colors_fg: Vec<[u8; 3]>,
@@ -145,6 +153,7 @@ impl SimpleRenderer {
             grids: Vec::new(),
 
             cell_size: Vec2 { x: 0, y: 0 },
+            atlas_cell_size: Vec2 { x: 0, y: 0 },
             cell_offset: Vec2 { x: 0, y: 0 },
 
             screen_colors_fg: Vec::new(),
@@ -365,6 +374,7 @@ impl LoadGlyph for SimpleRenderer {
                     self.columns,
                     self.lines,
                     self.cell_size,
+                    self.atlas_cell_size,
                     self.cell_offset,
                 ));
             }
@@ -388,6 +398,7 @@ impl LoadGlyph for SimpleRenderer {
                             self.columns,
                             self.lines,
                             self.cell_size,
+                            self.atlas_cell_size,
                             self.cell_offset,
                         ));
                     }
@@ -398,14 +409,15 @@ impl LoadGlyph for SimpleRenderer {
         self.quad_glyphs.insert_into_atlas(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+    fn clear(&mut self, cell_size: Vec2<i32>, atlas_cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
         self.cell_size = cell_size;
+        self.atlas_cell_size = atlas_cell_size;
         self.cell_offset = cell_offset;
 
         self.quad_glyphs.clear_atlas();
 
         for (index, grid) in &mut self.grids.iter_mut().enumerate() {
-            grid.clear_atlas(index, cell_size, cell_offset);
+            grid.clear_atlas(index, cell_size, atlas_cell_size, cell_offset);
         }
     }
 }
@@ -610,13 +622,46 @@ impl<'a> RenderContext<'a> {
                 //     self.this.screen_glyphs_ref[cell_index]
                 // );
 
+                let index = glyph.atlas_index as usize;
+
                 // put glyph reference into texture data
-                self.this.grids[glyph.atlas_index as usize].glyphs[cell_index] = GlyphRef {
-                    x: grid.column as u8,
-                    y: grid.line as u8,
-                    z: glyph.colored as u8,
-                    w: 0,
-                };
+                let glyph_ref = &mut self.this.grids[index].glyphs[cell_index];
+                glyph_ref.x = grid.column as u8;
+                glyph_ref.y = grid.line as u8;
+                glyph_ref.z |= 0b10000000; // There's something in this cell
+                if glyph.colored {
+                    glyph_ref.z |= 0b10000
+                }
+
+                if grid.overflow.intersects(GridOverflow::LEFT) && cell.column.0 > 0 {
+                    self.this.grids[index].glyphs[cell_index - 1].z |= GridOverflow::RIGHT.bits();
+                    if cell.line.0 > 0 {
+                        // FIXME only do if Y also overflows
+                        self.this.grids[index].glyphs[cell_index - self.this.columns - 1].z |=
+                            GridOverflow::RIGHT.bits();
+                    }
+                    if cell.line.0 < self.this.lines - 1 {
+                        // FIXME only do if Y also overflows
+                        self.this.grids[index].glyphs[cell_index + self.this.columns - 1].z |=
+                            GridOverflow::RIGHT.bits();
+                    }
+                }
+
+                if grid.overflow.intersects(GridOverflow::RIGHT)
+                    && cell.column.0 < self.this.columns - 1
+                {
+                    self.this.grids[index].glyphs[cell_index + 1].z |= GridOverflow::LEFT.bits();
+                    if cell.line.0 > 0 {
+                        // FIXME only do if Y also overflows
+                        self.this.grids[index].glyphs[cell_index - self.this.columns + 1].z |=
+                            GridOverflow::LEFT.bits();
+                    }
+                    if cell.line.0 < self.this.lines - 1 {
+                        // FIXME only do if Y also overflows
+                        self.this.grids[index].glyphs[cell_index + self.this.columns + 1].z |=
+                            GridOverflow::LEFT.bits();
+                    }
+                }
             }
             AtlasRef::Free(free) => {
                 let glyph_quad = GlyphQuad {
@@ -672,8 +717,8 @@ impl<'a> LoadGlyph for RenderContext<'a> {
         self.this.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        LoadGlyph::clear(self.this, cell_size, cell_offset);
+    fn clear(&mut self, cell_size: Vec2<i32>, atlas_cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        LoadGlyph::clear(self.this, cell_size, atlas_cell_size, cell_offset);
     }
 }
 
@@ -687,7 +732,7 @@ impl<'a> LoadGlyph for LoaderApi<'a> {
         self.renderer.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        LoadGlyph::clear(self.renderer, cell_size, cell_offset);
+    fn clear(&mut self, cell_size: Vec2<i32>, atlas_cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+        LoadGlyph::clear(self.renderer, cell_size, atlas_cell_size, cell_offset);
     }
 }
