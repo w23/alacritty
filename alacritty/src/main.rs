@@ -63,6 +63,9 @@ use crate::message_bar::MessageBuffer;
 #[macro_use]
 extern crate memoffset;
 
+#[macro_use]
+extern crate microprofile;
+
 fn main() {
     #[cfg(windows)]
     panic::attach_handler();

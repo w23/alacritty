@@ -32,6 +32,7 @@ dependencies = [
  "libc",
  "log",
  "memoffset",
+ "microprofile",
  "notify",
  "objc",
  "parking_lot",
@@ -1043,6 +1044,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "043175f069eda7b85febe4a74abbaeff828d9f8b448515d3151a14a3542811aa"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "microprofile"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "998988e00fcd6a009cd74528f25051d3a0c414c51f30e4696b59346c6d754257"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

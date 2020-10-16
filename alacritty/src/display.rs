@@ -162,10 +162,15 @@ pub struct Display {
 
     #[cfg(feature = "dump-raw-render-timings")]
     timing_dump_file: std::fs::File,
+
+		// FIXME feature this
+		last_mp_dump: Instant,
 }
 
 impl Display {
     pub fn new<E>(config: &Config, event_loop: &EventLoop<E>) -> Result<Display, Error> {
+				microprofile::init!();
+				microprofile::set_enable_all_groups(true);
         // Guess DPR based on first monitor.
         let estimated_dpr =
             event_loop.available_monitors().next().map(|m| m.scale_factor()).unwrap_or(1.);
@@ -311,6 +316,7 @@ impl Display {
             wayland_event_queue,
             #[cfg(feature = "dump-raw-render-timings")]
             timing_dump_file: std::fs::File::create("timing.dump").unwrap(),
+						last_mp_dump: Instant::now(),
         })
     }
 
@@ -452,6 +458,18 @@ impl Display {
         mods: ModifiersState,
         search_state: &SearchState,
     ) {
+				{
+					let now = Instant::now();
+					let delta = (now - self.last_mp_dump).as_secs();
+					if delta > 10 {
+						microprofile::dump_file_immediately!(&format!("mp-{:?}.html", now), "");
+						self.last_mp_dump = now;
+					}
+				}
+				microprofile::flip!();
+
+				microprofile::scope!("display", "draw");
+
         let grid_cells: Vec<RenderableCell> = terminal.renderable_cells(config).collect();
         let visual_bell_intensity = terminal.visual_bell.intensity();
         let background_color = terminal.background_color();
@@ -485,6 +503,7 @@ impl Display {
 
         // Draw grid.
         {
+						microprofile::scope!("display", "update cells");
             let _sampler = self.meter.sampler();
 
             // Iterate over all non-empty cells in the grid.

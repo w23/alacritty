@@ -221,6 +221,7 @@ impl SimpleRenderer {
     }
 
     fn draw_grid_passes(&mut self, size_info: &SizeInfo) {
+        microprofile::scope!("render", "draw_grid_passes");
         #[cfg(feature = "live-shader-reload")]
         {
             match self.program.poll() {
@@ -287,6 +288,7 @@ impl SimpleRenderer {
 
         let mut main_pass = true;
         for grid in &self.grids {
+            microprofile::scope!("render", "grid pass");
             let atlas_dims = grid.atlas.cell_dims();
             unsafe {
                 gl::Uniform4f(
@@ -333,6 +335,7 @@ impl SimpleRenderer {
     }
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
+        microprofile::scope!("render", "clear");
         for grid in &mut self.grids {
             grid.clear_grid();
         }
@@ -350,6 +353,7 @@ impl SimpleRenderer {
 
     #[cfg(not(any(target_os = "macos", windows)))]
     pub fn finish(&self) {
+        microprofile::scope!("render", "finish");
         unsafe {
             gl::Finish();
         }
@@ -429,6 +433,7 @@ impl<'a> RenderContext<'a> {
         fg: Rgb,
         bg: Option<Rgb>,
     ) {
+        microprofile::scope!("render", "render_string");
         trace!("render_string: {}", string);
 
         let bg_alpha = bg.map(|_| 1.0).unwrap_or(0.0);
@@ -457,6 +462,7 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn update_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+        microprofile::scope!("render", "update_cell");
         let wide = match cell.flags & Flags::WIDE_CHAR {
             Flags::WIDE_CHAR => true,
             _ => false,
@@ -598,6 +604,7 @@ impl<'a> RenderContext<'a> {
         cell_index: usize,
         zero_width: bool,
     ) {
+        microprofile::scope!("render", "push_char");
         let glyph = glyph_cache.get(glyph_key, self);
 
         match glyph.atlas_ref {
@@ -648,6 +655,7 @@ impl<'a> RenderContext<'a> {
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
     pub fn draw_rects(&mut self, size_info: &term::SizeInfo, rects: Vec<RenderRect>) {
+        microprofile::scope!("render", "draw rects");
         self.this.rectifier.begin(size_info);
         // Draw all the rects.
         for rect in rects {
@@ -657,6 +665,7 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn draw_grid_text(&mut self) {
+        microprofile::scope!("render", "draw text");
         // trace!(
         //     "Grids: {}, quad atlas-batches: {}",
         //     self.this.grids.len(),
