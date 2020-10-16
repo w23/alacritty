@@ -43,6 +43,7 @@ void main() {
 	if (any(lessThan(uv.xy, vec2(0.)))
 			|| any(greaterThanEqual(cell, screen_cells))
 	) {
+		// FIXME debug red padding to differentiate from old render
 		color = vec4(1., 0., 0., 1.);
 		return;
 	}
