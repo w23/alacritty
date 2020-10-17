@@ -215,7 +215,7 @@ impl GridGlyphRenderer {
         cell: &RenderableCell,
         atlas_index: usize,
         colored: bool,
-        grid: &AtlasRefGrid,
+        grid: AtlasRefGrid,
     ) {
         let cell_index = cell.line.0 * self.columns + cell.column.0;
         // put glyph reference into texture data

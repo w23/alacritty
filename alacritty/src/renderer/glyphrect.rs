@@ -116,7 +116,7 @@ impl QuadGlyphRenderer {
         }
 
         for group in &mut self.atlas_groups {
-            group.draw(size_info);
+            group.draw();
         }
 
         // FIXME should we really do this?
@@ -180,14 +180,14 @@ impl AtlasGroup {
         }
     }
 
-    fn draw(&mut self, size_info: &SizeInfo) {
+    fn draw(&mut self) {
         unsafe {
             // Binding to active slot 0
             gl::BindTexture(gl::TEXTURE_2D, self.atlas.id);
         }
 
         for batch in &mut self.batches {
-            batch.draw(size_info);
+            batch.draw();
         }
     }
 }
@@ -298,7 +298,7 @@ impl Batch {
         Ok(())
     }
 
-    pub fn draw(&mut self, size_info: &SizeInfo) {
+    pub fn draw(&mut self) {
         if self.indices.is_empty() {
             return;
         }

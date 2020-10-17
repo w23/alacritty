@@ -280,7 +280,7 @@ impl<'a> RenderContext<'a> {
 
         match glyph.atlas_ref {
             AtlasRef::Grid(atlas_ref) => {
-                self.this.grids.update_cell(cell, glyph.atlas_index, glyph.colored, &atlas_ref);
+                self.this.grids.update_cell(cell, glyph.atlas_index, glyph.colored, atlas_ref);
             }
             AtlasRef::Free(free) => {
                 let glyph_quad = GlyphQuad {
