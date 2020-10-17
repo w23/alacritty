@@ -14,7 +14,6 @@ use {
             RenderableCell, RenderableCellContent, SizeInfo,
         },
     },
-    log::*,
 };
 
 use alacritty_terminal::config::Cursor;
@@ -58,8 +57,6 @@ impl SimpleRenderer {
         cursor_config: Cursor,
         size_info: &'a SizeInfo,
     ) -> RenderContext<'a> {
-        self.quad_glyphs.clear();
-        self.grids.set_cursor(-1, -1, 0.0, 0.0, Rgb { r: 0, g: 0, b: 0 });
         RenderContext { this: self, size_info, config, cursor_config }
     }
 
@@ -80,6 +77,7 @@ impl SimpleRenderer {
     }
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
+        self.quad_glyphs.clear();
         self.grids.clear(color, background_opacity);
 
         unsafe {
@@ -182,6 +180,7 @@ impl<'a> RenderContext<'a> {
                 match glyph.atlas_ref {
                     AtlasRef::Grid(grid) => {
                         self.this.grids.set_cursor(
+                            glyph.atlas_index,
                             cell.column.0 as i32,
                             cell.line.0 as i32,
                             grid.column as f32,

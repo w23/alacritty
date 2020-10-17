@@ -11,6 +11,14 @@ use log::*;
 use std::ptr;
 
 #[derive(Debug)]
+pub struct CursorRef {
+    atlas_index: usize,
+    cell: [f32; 2],
+    glyph: [f32; 2],
+    color: [f32; 3],
+}
+
+#[derive(Debug)]
 pub struct GridGlyphRenderer {
     // Screen size
     columns: usize,
@@ -34,9 +42,7 @@ pub struct GridGlyphRenderer {
     vao: GLuint,
     vbo: GLuint,
 
-    cursor_cell: [f32; 2],
-    cursor_glyph: [f32; 2],
-    cursor_color: Rgb,
+    cursor: Option<CursorRef>,
 
     grids: Vec<Grid>,
 }
@@ -93,9 +99,7 @@ impl GridGlyphRenderer {
             vao,
             vbo,
 
-            cursor_cell: [-1.0; 2],
-            cursor_glyph: [-1.0; 2],
-            cursor_color: Rgb { r: 0, g: 0, b: 0 },
+            cursor: None,
 
             grids: Vec::new(),
         })
@@ -127,13 +131,14 @@ impl GridGlyphRenderer {
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
         for grid in &mut self.grids {
-            grid.clear_grid();
+            grid.clear();
         }
 
-        self.bg_alpha = (background_opacity * 255.0) as u8;
-        let bg_alpha = self.bg_alpha;
-        self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 3]);
+        self.cursor = None;
+        let bg_alpha = (background_opacity * 255.0) as u8;
+        self.bg_alpha = bg_alpha;
         self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b, bg_alpha]);
+        self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 3]);
 
         unsafe {
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
@@ -148,10 +153,22 @@ impl GridGlyphRenderer {
         self.grids.clear();
     }
 
-    pub fn set_cursor(&mut self, column: i32, line: i32, glyph_x: f32, glyph_y: f32, color: Rgb) {
-        self.cursor_cell = [column as f32, line as f32];
-        self.cursor_glyph = [glyph_x, glyph_y];
-        self.cursor_color = color;
+    pub fn set_cursor(
+        &mut self,
+        atlas_index: usize,
+        column: i32,
+        line: i32,
+        glyph_x: f32,
+        glyph_y: f32,
+        color: Rgb,
+    ) {
+        self.cursor = Some(CursorRef {
+            atlas_index,
+            cell: [column as f32, line as f32],
+            glyph: [glyph_x, glyph_y],
+            color: [color.r as f32 / 255., color.g as f32 / 255., color.b as f32 / 255.],
+        });
+        self.grids[atlas_index].dirty = true;
     }
 
     fn add_new_pass(&mut self) {
@@ -221,6 +238,31 @@ impl GridGlyphRenderer {
         // put glyph reference into texture data
         self.grids[atlas_index].glyphs[cell_index] =
             GlyphRef { x: grid.column as u8, y: grid.line as u8, z: colored as u8, w: 0 };
+        self.grids[atlas_index].dirty = true;
+    }
+
+    fn set_cursor_uniform(&self, pass: usize) {
+        match &self.cursor {
+            Some(cursor) if cursor.atlas_index == pass => unsafe {
+                gl::Uniform4f(
+                    self.program.u_cursor,
+                    cursor.cell[0],
+                    cursor.cell[1],
+                    cursor.glyph[0],
+                    cursor.glyph[1],
+                );
+                gl::Uniform3f(
+                    self.program.u_cursor_color,
+                    cursor.color[0],
+                    cursor.color[1],
+                    cursor.color[2],
+                );
+            },
+            _ => unsafe {
+                gl::Uniform4f(self.program.u_cursor, -1., -1., 0., 0.);
+                gl::Uniform3f(self.program.u_cursor_color, 0., 0., 0.);
+            },
+        }
     }
 
     pub fn draw(&mut self, size_info: &SizeInfo) {
@@ -250,19 +292,6 @@ impl GridGlyphRenderer {
             gl::Uniform1i(self.program.u_glyph_ref, 1);
             gl::Uniform1i(self.program.u_color_fg, 2);
             gl::Uniform1i(self.program.u_color_bg, 3);
-            gl::Uniform4f(
-                self.program.u_cursor,
-                self.cursor_cell[0],
-                self.cursor_cell[1],
-                self.cursor_glyph[0],
-                self.cursor_glyph[1],
-            );
-            gl::Uniform3f(
-                self.program.u_cursor_color,
-                self.cursor_color.r as f32 / 255.,
-                self.cursor_color.g as f32 / 255.,
-                self.cursor_color.b as f32 / 255.,
-            );
 
             gl::ActiveTexture(gl::TEXTURE2);
             gl::BindTexture(gl::TEXTURE_2D, self.screen_colors_fg_tex);
@@ -288,8 +317,11 @@ impl GridGlyphRenderer {
             gl::EnableVertexAttribArray(0);
         }
 
-        let mut main_pass = true;
-        for grid in &self.grids {
+        for (pass_num, grid) in (&self.grids).iter().enumerate() {
+            let main_pass = pass_num == 0;
+            if !main_pass && !grid.dirty {
+                continue;
+            }
             let atlas_dims = grid.atlas.cell_dims();
             unsafe {
                 gl::Uniform4f(
@@ -302,6 +334,7 @@ impl GridGlyphRenderer {
                     atlas_dims.size.y as f32,
                 );
                 gl::Uniform1i(self.program.u_main_pass, main_pass as i32);
+                self.set_cursor_uniform(pass_num);
 
                 gl::ActiveTexture(gl::TEXTURE0);
                 gl::BindTexture(gl::TEXTURE_2D, grid.atlas.tex);
@@ -324,7 +357,6 @@ impl GridGlyphRenderer {
                     //gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
                     gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE);
                 }
-                main_pass = false;
             }
         }
 
@@ -350,7 +382,8 @@ struct Grid {
 
     /// Screen worth of glyphs
     glyphs: Vec<GlyphRef>,
-    // FIXME mark as empty on clear and don't paint if it is empty
+
+    dirty: bool,
 }
 
 impl Grid {
@@ -365,6 +398,7 @@ impl Grid {
         Self {
             atlas: GridAtlas::new(index, cell_size, cell_offset),
             glyphs: vec![GlyphRef { x: 0, y: 0, z: 0, w: 0 }; cells],
+            dirty: false,
         }
     }
 
@@ -373,7 +407,9 @@ impl Grid {
         self.glyphs.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
     }
 
-    fn clear_grid(&mut self) {
+    fn clear(&mut self) {
+        // TODO Can avoid doing this memset if it's not dirty, but have to track whether it's been cleared then
         self.glyphs.iter_mut().for_each(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 });
+        self.dirty = false;
     }
 }

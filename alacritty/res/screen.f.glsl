@@ -59,13 +59,15 @@ void main() {
 	if (u_main_pass) {
 		color = bg;
 		vec3 mask;
-		if (cell == u_cursor.xy) {
-			color = blendGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, color);
-		}
 	} else {
 		color = vec4(0.);
 		//if (empty) discard;
 		//if (!empty) color = vec4(.5);
+	}
+
+	// FIXME cursor being not in the main pass workaround. Does not work in all cases: will overwrite chars from main pass if the cursor is not
+	if (cell == u_cursor.xy) {
+		color = blendGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, color);
 	}
 
 	// FIXME: discard on non-main, return on main IF there are no overlapping glyph parts from neighbour grid cells
