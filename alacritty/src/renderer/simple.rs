@@ -129,8 +129,6 @@ impl<'a> RenderContext<'a> {
         fg: Rgb,
         bg: Option<Rgb>,
     ) {
-        trace!("render_string: {}", string);
-
         let bg_alpha = bg.map(|_| 1.0).unwrap_or(0.0);
 
         let cells = string

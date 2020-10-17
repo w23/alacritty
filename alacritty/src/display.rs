@@ -506,23 +506,10 @@ impl Display {
             let text = message.text(&size_info);
             message_bar_lines = text.len();
 
-            // // Create a new rectangle for the background.
-            // let start_line = size_info.lines().0 - message_bar_lines;
-            // let y = size_info.cell_height.mul_add(start_line as f32, size_info.padding_y);
-            //
-            // let color = match message.ty() {
-            //     MessageType::Error => config.colors.normal().red,
-            //     MessageType::Warning => config.colors.normal().yellow,
-            // };
-            //
-            // let message_bar_rect =
-            //     RenderRect::new(0., y, size_info.width, size_info.height - y, color, 1.);
-            //
-            // // Push message_bar in the end, so it'll be above all other content.
-            // rects.push(message_bar_rect);
-            //
-            // // Draw rectangles.
-            // self.renderer.draw_rects(&size_info, rects);
+            let color = match message.ty() {
+                MessageType::Error => config.colors.normal().red,
+                MessageType::Warning => config.colors.normal().yellow,
+            };
 
             // Relay messages to the user.
             let fg = config.colors.primary.background;
@@ -532,7 +519,7 @@ impl Display {
                     Line(size_info.lines().saturating_sub(i + 1)),
                     &message_text,
                     fg,
-                    None,
+                    Some(color),
                 );
             }
         }
