@@ -3,6 +3,7 @@ use shade::*;
 
 mod atlas;
 mod glyphrect;
+mod grid;
 mod math;
 mod shade;
 mod solidrect;

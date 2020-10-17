@@ -574,7 +574,7 @@ impl Display {
         // Update IME position.
         self.window.update_ime_position(ime_position, &self.size_info);
 
-        render_context.draw_grid_text();
+        render_context.draw_text();
 
         let mut rects = lines.rects(&metrics, &size_info);
 
