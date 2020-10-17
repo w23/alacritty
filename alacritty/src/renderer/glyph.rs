@@ -3,6 +3,8 @@ use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::Delta;
 use crate::config::window::{StartupMode, WindowConfig};
 use crate::config::Config;
+use crate::cursor;
+use alacritty_terminal::ansi::CursorStyle;
 use alacritty_terminal::term::CursorKey;
 use crossfont::{FontDesc, FontKey, Rasterize, Rasterizer, Size, Slant, Style, Weight};
 use fnv::FnvHasher;
@@ -141,7 +143,7 @@ impl GlyphCache {
             cell_size,
         };
 
-        cache.clear_cache_with_common_glyphs(loader);
+        cache.clear_cache_with_common_glyphs(loader, config);
 
         Ok(cache)
     }
@@ -247,7 +249,7 @@ impl GlyphCache {
         self.cell_size = Vec2::new(cell_width as i32, cell_height as i32);
         self.cache = HashMap::default();
         self.cursor_cache = HashMap::default();
-        self.clear_cache_with_common_glyphs(loader);
+        self.clear_cache_with_common_glyphs(loader, config);
     }
 
     pub fn update_font_size<L: LoadGlyph>(
@@ -290,7 +292,7 @@ impl GlyphCache {
     }
 
     /// Prefetch glyphs that are almost guaranteed to be loaded anyways.
-    fn clear_cache_with_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L) {
+    fn clear_cache_with_common_glyphs<L: LoadGlyph>(&mut self, loader: &mut L, config: &Config) {
         let glyph_offset = self.glyph_offset;
         let metrics = &self.metrics;
         let font_size = self.font_size;
@@ -352,6 +354,33 @@ impl GlyphCache {
         info!("Max glyph size: {:?}", cell_size);
 
         loader.clear(atlas_cell_size, atlas_cell_offset);
+
+        // Multipass grid render workaround for large font sizes
+        // Generate cursor glyphs first to ensure that they end up strictly
+        // in the first atlas/pass
+        for style in [
+            CursorStyle::Block,
+            CursorStyle::Beam,
+            CursorStyle::Underline,
+            CursorStyle::HollowBlock,
+        ]
+        .iter()
+        {
+            let cursor_key = CursorKey { style: *style, is_wide: false };
+            let cursor_glyph = RasterizedGlyph {
+                wide: false,
+                zero_width: false,
+                rasterized: cursor::get_cursor_glyph(
+                    cursor_key.style,
+                    *metrics,
+                    config.ui_config.font.offset.x,
+                    config.ui_config.font.offset.y,
+                    cursor_key.is_wide,
+                    config.cursor.thickness(),
+                ),
+            };
+            self.cursor_cache.entry(cursor_key).or_insert_with(|| loader.load_glyph(&cursor_glyph));
+        }
 
         for glyph in glyphs {
             self.cache.entry(glyph.0).or_insert_with(|| loader.load_glyph(&glyph.1));
