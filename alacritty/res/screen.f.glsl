@@ -13,12 +13,12 @@ uniform vec4 u_cursor;
 uniform vec3 u_cursor_color;
 uniform bool u_main_pass;
 
-vec4 blendGlyphPixel(vec4 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
+vec4 blendGlyphPixel(vec3 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
 	vec2 atlas_pix = glyph_ref.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
 	vec4 glyph = texture(u_atlas, atlas_pix / vec2(textureSize(u_atlas, 0)));
 	vec3 mask;
 
-	if (glyph_ref.z > 0.) {
+	if (glyph_ref.z > 2.) {
 		// Colored glyph (e.g. emoji)
 		mask = vec3(glyph.a);
 		glyph.rgb /= glyph.a;
@@ -32,6 +32,13 @@ vec4 blendGlyphPixel(vec4 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
 	return vec4(mix(dst.rgb, fg, mask.rgb), color.a + glyph.a);
 }
 
+void doGlyph(vec2 offset, vec2 cell, vec2 cell_pix, vec2 screen_cells, inout vec4 color) {
+	vec2 tuv = (cell + offset + .5) / screen_cells;
+	vec3 glyph_ref = texture(u_glyph_ref, tuv).rgb * 255.;
+	vec3 fg = texture(u_color_fg, tuv).rgb;
+	color = blendGlyphPixel(glyph_ref, cell_pix - u_cell_dim * offset, fg, color);
+}
+
 void main() {
 	vec2 uv = gl_FragCoord.xy;
 	uv.y = u_screen_dim.w - uv.y;
@@ -41,33 +48,28 @@ void main() {
 	vec2 screen_cells = vec2(textureSize(u_glyph_ref, 0));
 
 	if (any(lessThan(uv.xy, vec2(0.)))
-			|| any(greaterThanEqual(cell, screen_cells))
-	) {
+		|| any(greaterThanEqual(cell, screen_cells)))
+	{
 		// FIXME debug red padding to differentiate from old render
 		color = vec4(1., 0., 0., 1.);
 		return;
 	}
 
 	vec2 tuv = (cell + .5) / screen_cells;
-	vec4 glyph = texture(u_glyph_ref, tuv);
-	vec3 fg = texture(u_color_fg, tuv).rgb;
-	vec4 bg = texture(u_color_bg, tuv);
 	vec2 cell_pix = mod(uv, u_cell_dim);
-
-	bool empty = (glyph.xy == vec2(0.));
+	vec3 glyph = texture(u_glyph_ref, tuv).rgb * 255.;
 
 	if (u_main_pass) {
-		color = bg;
-		vec3 mask;
+		color = texture(u_color_bg, tuv);
+		if (cell == u_cursor.xy) {
+			color = blendGlyphPixel(vec3(u_cursor.zw, 1.), cell_pix, u_cursor_color, color);
+		}
+		//color = vec4(vec3(mod(gl_FragCoord.x + gl_FragCoord.y, 2.)), 1.); return;
 	} else {
 		color = vec4(0.);
-		//if (empty) discard;
-		//if (!empty) color = vec4(.5);
-	}
-
-	// FIXME cursor being not in the main pass workaround. Does not work in all cases: will overwrite chars from main pass if the cursor is not
-	if (cell == u_cursor.xy) {
-		color = blendGlyphPixel(vec4(u_cursor.zw, 0., 0.), cell_pix, u_cursor_color, color);
+		//return;
+		bool empty = glyph.z < 0.;
+		if (empty) discard;
 	}
 
 	// FIXME: discard on non-main, return on main IF there are no overlapping glyph parts from neighbour grid cells
@@ -76,7 +78,8 @@ void main() {
 	/* } */
 
 	// This cell glyph
-	color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix, fg, color);
+	vec3 fg = texture(u_color_fg, tuv).rgb;
+	color = blendGlyphPixel(glyph, cell_pix, fg, color);
 
 	// Neighbour cells overlappery
 	// TODO: glyph-level (outside shader) masking for these cases so that we only check some bits
@@ -92,19 +95,13 @@ void main() {
 	// +, -
 
 	if (cell_pix.y > (u_cell_dim.y - u_atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
-		vec2 tuv = (cell + vec2(.5, 1.5)) / screen_cells;
-		vec4 glyph = texture(u_glyph_ref, tuv);
-		vec3 fg = texture(u_color_fg, tuv).rgb;
-		color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(0., -u_cell_dim.y), fg, color);
+		doGlyph(vec2(0., 1.), cell, cell_pix, screen_cells, color);
 		//color.g = 1.;
 	}
 
 	if (cell.x > 0. && cell_pix.x < (u_atlas_dim.z - u_atlas_dim.x - u_cell_dim.x)) {
-		vec2 tuv = (cell + vec2(-.5, .5)) / screen_cells;
-		vec4 glyph = texture(u_glyph_ref, tuv);
-		vec3 fg = texture(u_color_fg, tuv).rgb;
-		color = blendGlyphPixel(vec4(glyph.xy * 255., glyph.zw), cell_pix + vec2(u_cell_dim.x, 0.), fg, color);
-		//color.b = 1.;
+		doGlyph(vec2(-1., 0.), cell, cell_pix, screen_cells, color);
+		//color.r = 1.;
 	}
 
 	//color = vec4(fg.rgb, 1.);

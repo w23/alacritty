@@ -49,7 +49,7 @@ pub struct GridGlyphRenderer {
 
 impl GridGlyphRenderer {
     pub fn new() -> Result<Self, Error> {
-        let screen_glyphs_ref_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA8) };
+        let screen_glyphs_ref_tex = unsafe { create_texture(256, 256, PixelFormat::RGB8) };
         let screen_colors_fg_tex = unsafe { create_texture(256, 256, PixelFormat::RGBA8) };
         let screen_colors_bg_tex = unsafe { create_texture(256, 256, PixelFormat::RGB8) };
 
@@ -236,8 +236,12 @@ impl GridGlyphRenderer {
     ) {
         let cell_index = cell.line.0 * self.columns + cell.column.0;
         // put glyph reference into texture data
-        self.grids[atlas_index].glyphs[cell_index] =
-            GlyphRef { x: grid.column as u8, y: grid.line as u8, z: colored as u8, w: 0 };
+        self.grids[atlas_index].glyphs[cell_index] = GlyphRef {
+            atlas_x: grid.column as u8,
+            atlas_y: grid.line as u8,
+            flags: GLYPH_REF_FLAG_NOT_EMPTY_BIT
+                | if colored { GLYPH_REF_FLAG_COLORED_BIT } else { 0 },
+        };
         self.grids[atlas_index].dirty = true;
     }
 
@@ -344,7 +348,7 @@ impl GridGlyphRenderer {
                 upload_texture(
                     self.columns as i32,
                     self.lines as i32,
-                    PixelFormat::RGBA8,
+                    PixelFormat::RGB8,
                     grid.glyphs.as_ptr() as *const _,
                 );
                 gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
@@ -368,13 +372,20 @@ impl GridGlyphRenderer {
     }
 }
 
+const GLYPH_REF_FLAG_NOT_EMPTY_BIT: u8 = 0b00000001;
+const GLYPH_REF_FLAG_COLORED_BIT: u8 = 0b00000010;
+
 #[derive(Debug, Clone)]
 struct GlyphRef {
-    x: u8,
-    y: u8,
-    z: u8,
-    w: u8,
+    // Coordinates into grid atlas
+    atlas_x: u8,
+    atlas_y: u8,
+
+    // Features of this glyph
+    flags: u8,
 }
+
+const EMPTY_GLYPH_REF: GlyphRef = GlyphRef { atlas_x: 0, atlas_y: 0, flags: 0 };
 
 #[derive(Debug)]
 struct Grid {
@@ -397,19 +408,19 @@ impl Grid {
         let cells = columns * lines;
         Self {
             atlas: GridAtlas::new(index, cell_size, cell_offset),
-            glyphs: vec![GlyphRef { x: 0, y: 0, z: 0, w: 0 }; cells],
+            glyphs: vec![EMPTY_GLYPH_REF; cells],
             dirty: false,
         }
     }
 
     fn resize(&mut self, columns: usize, lines: usize) {
         let cells = columns * lines;
-        self.glyphs.resize(cells, GlyphRef { x: 0, y: 0, z: 0, w: 0 });
+        self.glyphs.resize(cells, EMPTY_GLYPH_REF);
     }
 
     fn clear(&mut self) {
         // TODO Can avoid doing this memset if it's not dirty, but have to track whether it's been cleared then
-        self.glyphs.iter_mut().for_each(|x| *x = GlyphRef { x: 0, y: 0, z: 0, w: 0 });
+        self.glyphs.iter_mut().for_each(|x| *x = EMPTY_GLYPH_REF);
         self.dirty = false;
     }
 }
