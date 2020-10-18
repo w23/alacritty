@@ -372,8 +372,8 @@ impl GridGlyphRenderer {
     }
 }
 
-const GLYPH_REF_FLAG_NOT_EMPTY_BIT: u8 = 0b00000001;
-const GLYPH_REF_FLAG_COLORED_BIT: u8 = 0b00000010;
+const GLYPH_REF_FLAG_NOT_EMPTY_BIT: u8 = 0b0000_0001;
+const GLYPH_REF_FLAG_COLORED_BIT: u8 = 0b0000_0010;
 
 #[derive(Debug, Clone)]
 struct GlyphRef {
