@@ -13,7 +13,7 @@ use log::*;
 use std::mem::size_of;
 use std::ptr;
 
-pub enum RectAddError {
+enum RectAddError {
     Full,
 }
 
@@ -103,7 +103,6 @@ impl QuadGlyphRenderer {
             // Swap program.
             gl::UseProgram(self.program.program.id);
 
-            // FIXME expect atlas to be bound at 0
             gl::Uniform1i(self.program.u_atlas, 0);
             gl::Uniform2f(self.program.u_scale, 2.0 / width as f32, -2.0 / height as f32);
 
@@ -241,12 +240,12 @@ impl Batch {
         Ok(Self { vao, vbo, ebo, indices: Vec::new(), vertices: Vec::new() })
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.indices.clear();
         self.vertices.clear();
     }
 
-    pub fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) -> Result<(), RectAddError> {
+    fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) -> Result<(), RectAddError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);
@@ -298,7 +297,7 @@ impl Batch {
         Ok(())
     }
 
-    pub fn draw(&mut self) {
+    fn draw(&mut self) {
         if self.indices.is_empty() {
             return;
         }
