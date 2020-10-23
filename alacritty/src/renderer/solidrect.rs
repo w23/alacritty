@@ -8,7 +8,7 @@ use alacritty_terminal::term::SizeInfo;
 use std::mem::size_of;
 use std::ptr;
 
-pub enum RectAddError {
+enum InsertError {
     Full,
 }
 
@@ -30,17 +30,18 @@ struct Vertex {
 }
 
 #[derive(Debug)]
-pub struct Rectifier {
+pub struct SolidRectRenderer {
+    program: RectShaderProgram,
+
     vao: GLuint,
     vbo: GLuint,
     ebo: GLuint,
-    program: RectShaderProgram,
+
     indices: Vec<u16>,
     vertices: Vec<Vertex>,
-    size_info: Option<SizeInfo>,
 }
 
-impl Rectifier {
+impl SolidRectRenderer {
     pub fn new() -> Result<Self, Error> {
         let mut vao: GLuint = 0;
         let mut vbo: GLuint = 0;
@@ -53,26 +54,98 @@ impl Rectifier {
         }
 
         Ok(Self {
+            program: RectShaderProgram::new()?,
             vao,
             vbo,
             ebo,
-            program: RectShaderProgram::new()?,
             indices: Vec::new(),
             vertices: Vec::new(),
-            size_info: None,
         })
     }
 
-    pub fn begin(&mut self, size_info: &SizeInfo) {
-        self.indices.clear();
-        self.vertices.clear();
-        self.size_info = Some(*size_info);
+    pub fn draw(&mut self, size_info: &SizeInfo, rects: Vec<RenderRect>) {
+        if rects.is_empty() {
+            return;
+        }
+
+        // Prepare common state
+        unsafe {
+            // Setup buffers.
+            gl::BindVertexArray(self.vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+
+            gl::UseProgram(self.program.id);
+
+            // Position.
+            gl::VertexAttribPointer(
+                0,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                ptr::null(),
+            );
+            gl::EnableVertexAttribArray(0);
+
+            // Color
+            gl::VertexAttribPointer(
+                1,
+                4,
+                gl::UNSIGNED_BYTE,
+                gl::TRUE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, color) as *const _,
+            );
+            gl::EnableVertexAttribArray(1);
+
+            // Remove padding from viewport.
+            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
+
+            // Change blending strategy.
+            gl::Enable(gl::BLEND);
+            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+        }
+
+        let center_x = size_info.width / 2.;
+        let center_y = size_info.height / 2.;
+
+        for rect in &rects {
+            if let Err(InsertError::Full) = self.append_rect(center_x, center_y, rect) {
+                self.draw_accumulated();
+            }
+        }
+
+        self.draw_accumulated();
+
+        // FIXME should we really do this here? Can we depend on next stage properly resetting its state?
+        unsafe {
+            // FIXME should we really do this here? Can we depend on next stage properly resetting its state?
+            // Reset data and buffers.
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindVertexArray(0);
+
+            // Deactivate rectangle program again.
+            // Reset blending strategy.
+            gl::Disable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
+
+            let padding_x = size_info.padding_x as i32;
+            let padding_y = size_info.padding_y as i32;
+            let width = size_info.width as i32;
+            let height = size_info.height as i32;
+            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
+        }
     }
 
-    pub fn add(&mut self, rect: &RenderRect) -> Result<(), RectAddError> {
+    fn append_rect(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        rect: &RenderRect,
+    ) -> Result<(), InsertError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
-            return Err(RectAddError::Full);
+            return Err(InsertError::Full);
         }
         let index = index as u16;
 
@@ -80,11 +153,7 @@ impl Rectifier {
             return Ok(());
         }
 
-        let size_info = self.size_info.as_ref().unwrap();
-
         // Calculate rectangle position.
-        let center_x = size_info.width / 2.;
-        let center_y = size_info.height / 2.;
         let x = (rect.x - center_x) / center_x;
         let y = -(rect.y - center_y) / center_y;
         let width = rect.width / center_x;
@@ -112,26 +181,19 @@ impl Rectifier {
         Ok(())
     }
 
-    pub fn draw(&self) {
-        let size_info = self.size_info.as_ref().unwrap();
+    fn draw_accumulated(&mut self) {
         if self.indices.is_empty() {
             return;
         }
 
-        // Swap to rectangle rendering program.
+        // Upload accumulated buffers
         unsafe {
-            // Swap program.
-            gl::UseProgram(self.program.id);
-
-            // Remove padding from viewport.
-            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
-
-            // Change blending strategy.
-            gl::Enable(gl::BLEND);
-            gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
-            // Setup data and buffers.
-            gl::BindVertexArray(self.vao);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (self.vertices.len() * std::mem::size_of::<Vertex>()) as isize,
+                self.vertices.as_ptr() as *const _,
+                gl::STREAM_DRAW,
+            );
 
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
             gl::BufferData(
@@ -141,60 +203,15 @@ impl Rectifier {
                 gl::STREAM_DRAW,
             );
 
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (self.vertices.len() * std::mem::size_of::<Vertex>()) as isize,
-                self.vertices.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
-
-            // Position.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-
-            // Color
-            gl::VertexAttribPointer(
-                1,
-                4,
-                gl::UNSIGNED_BYTE,
-                gl::TRUE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, color) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-
             gl::DrawElements(
                 gl::TRIANGLES,
                 self.indices.len() as i32,
                 gl::UNSIGNED_SHORT,
                 ptr::null(),
             );
-
-            // Deactivate rectangle program again.
-            // Reset blending strategy.
-            gl::Disable(gl::BLEND);
-            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            let padding_x = size_info.padding_x as i32;
-            let padding_y = size_info.padding_y as i32;
-            let width = size_info.width as i32;
-            let height = size_info.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
         }
+
+        self.indices.clear();
+        self.vertices.clear();
     }
 }

@@ -22,7 +22,7 @@ use super::glyph::{AtlasRef, Glyph, GlyphKey, RasterizedGlyph};
 use super::glyphrect::{GlyphQuad, QuadGlyphRenderer};
 use super::grid::GridGlyphRenderer;
 use super::math::*;
-use super::solidrect;
+use super::solidrect::SolidRectRenderer;
 
 #[derive(Debug)]
 pub struct SimpleRenderer {
@@ -38,16 +38,15 @@ pub struct SimpleRenderer {
 
     // Solid-color rects
     // FULL BRIDGE
-    rectifier: solidrect::Rectifier,
+    solid_rects: SolidRectRenderer,
 }
 
 impl SimpleRenderer {
     pub fn new() -> Result<SimpleRenderer, Error> {
         Ok(Self {
-            quad_glyphs: QuadGlyphRenderer::new(),
             grids: GridGlyphRenderer::new()?,
-
-            rectifier: solidrect::Rectifier::new()?,
+            quad_glyphs: QuadGlyphRenderer::new(),
+            solid_rects: SolidRectRenderer::new()?,
         })
     }
 
@@ -309,12 +308,7 @@ impl<'a> RenderContext<'a> {
 
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
     pub fn draw_rects(&mut self, size_info: &term::SizeInfo, rects: Vec<RenderRect>) {
-        self.this.rectifier.begin(size_info);
-        // Draw all the rects.
-        for rect in rects {
-            self.this.rectifier.add(&rect);
-        }
-        self.this.rectifier.draw();
+        self.this.solid_rects.draw(size_info, rects);
     }
 
     pub fn draw_text(&mut self) {
