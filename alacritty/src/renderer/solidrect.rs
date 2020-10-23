@@ -70,9 +70,10 @@ impl SolidRectRenderer {
 
         // Prepare common state
         unsafe {
-            // Setup buffers.
+            // Setup buffers
             gl::BindVertexArray(self.vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
 
             gl::UseProgram(self.program.id);
 
@@ -121,6 +122,7 @@ impl SolidRectRenderer {
         unsafe {
             // FIXME should we really do this here? Can we depend on next stage properly resetting its state?
             // Reset data and buffers.
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
@@ -195,7 +197,6 @@ impl SolidRectRenderer {
                 gl::STREAM_DRAW,
             );
 
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
             gl::BufferData(
                 gl::ELEMENT_ARRAY_BUFFER,
                 (self.indices.len() * std::mem::size_of::<u16>()) as isize,
