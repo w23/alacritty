@@ -20,7 +20,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{self, Flags};
 use alacritty_terminal::term::{self, color::Rgb, RenderableCell, RenderableCellContent, SizeInfo};
 pub use glyph::GlyphCache;
-use glyph::{AtlasRef, Glyph, GlyphKey, LoadGlyph, RasterizedGlyph};
+use glyph::{AtlasGlyph, GlyphKey, LoadGlyph, RasterizedGlyph};
 use glyphrect::{GlyphQuad, QuadGlyphRenderer};
 use grid::GridGlyphRenderer;
 use math::*;
@@ -126,10 +126,10 @@ impl Renderer {
 }
 
 impl LoadGlyph for Renderer {
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> AtlasGlyph {
         match self.grids.load_glyph(rasterized) {
-            Some(glyph) => glyph,
-            None => self.quad_glyphs.insert_into_atlas(rasterized),
+            Some(glyph) => AtlasGlyph::Grid(glyph),
+            None => AtlasGlyph::Quad(self.quad_glyphs.insert_into_atlas(rasterized)),
         }
     }
 
@@ -208,28 +208,26 @@ impl<'a> RenderContext<'a> {
                     })
                 });
 
-                match glyph.atlas_ref {
-                    AtlasRef::Grid(grid) => {
+                match glyph {
+                    AtlasGlyph::Grid(glyph_grid) => {
                         self.this.grids.set_cursor(
-                            glyph.atlas_index,
+                            glyph_grid.atlas_index,
                             cell.column.0 as i32,
                             cell.line.0 as i32,
-                            grid.column as f32,
-                            grid.line as f32,
+                            glyph_grid.column as f32,
+                            glyph_grid.line as f32,
                             cell.fg,
                         );
                     },
 
-                    AtlasRef::Free(free) => {
+                    AtlasGlyph::Quad(quad) => {
                         let glyph_quad = GlyphQuad {
-                            atlas_index: glyph.atlas_index,
+                            glyph: quad,
                             pos: Vec2::<i16> {
                                 x: cell.column.0 as i16 * self.size_info.cell_width as i16,
                                 y: cell.line.0 as i16 * self.size_info.cell_height as i16,
                             },
-                            geom: free,
                             fg: cell.fg,
-                            colored: glyph.colored,
                         };
 
                         self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
@@ -306,13 +304,13 @@ impl<'a> RenderContext<'a> {
     ) {
         let glyph = glyph_cache.get(glyph_key, self);
 
-        match glyph.atlas_ref {
-            AtlasRef::Grid(atlas_ref) => {
-                self.this.grids.update_cell(cell, glyph.atlas_index, glyph.colored, atlas_ref);
+        match glyph {
+            AtlasGlyph::Grid(grid_glyph) => {
+                self.this.grids.update_cell(cell, grid_glyph);
             },
-            AtlasRef::Free(free) => {
+            AtlasGlyph::Quad(quad_glyph) => {
                 let glyph_quad = GlyphQuad {
-                    atlas_index: glyph.atlas_index,
+                    glyph: quad_glyph,
                     pos: Vec2::<i16> {
                         x: (if zero_width {
                             // The metrics of zero-width characters are based on rendering
@@ -328,9 +326,7 @@ impl<'a> RenderContext<'a> {
                             * self.size_info.cell_width as i16,
                         y: cell.line.0 as i16 * self.size_info.cell_height as i16,
                     },
-                    geom: free,
                     fg: cell.fg,
-                    colored: glyph.colored,
                 };
 
                 self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
@@ -350,7 +346,7 @@ impl<'a> RenderContext<'a> {
 }
 
 impl<'a> LoadGlyph for RenderContext<'a> {
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> AtlasGlyph {
         self.this.load_glyph(rasterized)
     }
 
@@ -365,7 +361,7 @@ pub struct LoaderApi<'a> {
 }
 
 impl<'a> LoadGlyph for LoaderApi<'a> {
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> AtlasGlyph {
         self.renderer.load_glyph(rasterized)
     }
 

@@ -1,5 +1,5 @@
 use super::atlas::{AtlasInsertError, GridAtlas};
-use super::glyph::{AtlasRefGrid, Glyph, RasterizedGlyph};
+use super::glyph::{GridAtlasGlyph, RasterizedGlyph};
 use super::math::*;
 use super::shade::ScreenShaderProgram;
 use super::texture::{create_texture, upload_texture, PixelFormat};
@@ -182,7 +182,7 @@ impl GridGlyphRenderer {
         ));
     }
 
-    pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Option<Glyph> {
+    pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Option<GridAtlasGlyph> {
         if rasterized.wide || rasterized.zero_width {
             return None;
         }
@@ -227,22 +227,16 @@ impl GridGlyphRenderer {
         }
     }
 
-    pub fn update_cell(
-        &mut self,
-        cell: &RenderableCell,
-        atlas_index: usize,
-        colored: bool,
-        grid: AtlasRefGrid,
-    ) {
+    pub fn update_cell(&mut self, cell: &RenderableCell, glyph: &GridAtlasGlyph) {
         let cell_index = cell.line.0 * self.columns + cell.column.0;
         // put glyph reference into texture data
-        self.grids[atlas_index].glyphs[cell_index] = GlyphRef {
-            atlas_x: grid.column as u8,
-            atlas_y: grid.line as u8,
+        self.grids[glyph.atlas_index].glyphs[cell_index] = GlyphRef {
+            atlas_x: glyph.column as u8,
+            atlas_y: glyph.line as u8,
             flags: GLYPH_REF_FLAG_NOT_EMPTY_BIT
-                | if colored { GLYPH_REF_FLAG_COLORED_BIT } else { 0 },
+                | if glyph.colored { GLYPH_REF_FLAG_COLORED_BIT } else { 0 },
         };
-        self.grids[atlas_index].dirty = true;
+        self.grids[glyph.atlas_index].dirty = true;
     }
 
     fn set_cursor_uniform(&self, pass: usize) {

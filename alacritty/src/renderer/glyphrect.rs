@@ -1,5 +1,5 @@
 use super::atlas::{Atlas, AtlasInsertError};
-use super::glyph::{AtlasRefFree, Glyph, RasterizedGlyph};
+use super::glyph::{QuadAtlasGlyph, RasterizedGlyph};
 use super::math::*;
 use super::shade::GlyphRectShaderProgram;
 use crate::gl;
@@ -17,12 +17,10 @@ enum RectAddError {
     Full,
 }
 
-pub struct GlyphQuad {
-    pub atlas_index: usize,
+pub struct GlyphQuad<'a> {
+    pub glyph: &'a QuadAtlasGlyph,
     pub pos: Vec2<i16>,
-    pub geom: AtlasRefFree,
     pub fg: alacritty_terminal::term::color::Rgb,
-    pub colored: bool,
 }
 
 #[derive(Debug)]
@@ -48,7 +46,7 @@ impl QuadGlyphRenderer {
         }
     }
 
-    pub fn insert_into_atlas(&mut self, rasterized: &RasterizedGlyph) -> Glyph {
+    pub fn insert_into_atlas(&mut self, rasterized: &RasterizedGlyph) -> QuadAtlasGlyph {
         for group in &mut self.atlas_groups {
             match group.atlas.insert(rasterized) {
                 Ok(glyph) => {
@@ -74,7 +72,7 @@ impl QuadGlyphRenderer {
     }
 
     pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) {
-        self.atlas_groups[glyph.atlas_index].add(size_info, glyph);
+        self.atlas_groups[glyph.glyph.atlas_index].add(size_info, glyph);
     }
 
     pub fn draw(&mut self, size_info: &SizeInfo) {
@@ -252,13 +250,13 @@ impl Batch {
         }
         let index = index as u16;
 
-        let g = glyph.geom;
+        let g = glyph.glyph;
 
         // Calculate rectangle position.
         let x = glyph.pos.x + g.left;
         let y = glyph.pos.y + (size_info.cell_height as i16 - g.top);
         let fg = Rgb::from(glyph.fg);
-        let flags = if glyph.colored { 1 } else { 0 };
+        let flags = if g.colored { 1 } else { 0 };
 
         self.vertices.push(Vertex {
             x,

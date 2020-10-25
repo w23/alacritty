@@ -29,7 +29,7 @@ pub struct RasterizedGlyph {
 /// `LoadGlyph` allows for copying a rasterized glyph into graphics memory.
 pub trait LoadGlyph {
     /// Load the rasterized glyph into GPU memory.
-    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Glyph;
+    fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> AtlasGlyph;
 
     /// Clear any state accumulated from previous loaded glyphs.
     ///
@@ -38,34 +38,31 @@ pub trait LoadGlyph {
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct AtlasRefGrid {
+pub struct GridAtlasGlyph {
+    pub atlas_index: usize,
     pub line: u16,
     pub column: u16,
+    pub colored: bool,
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct AtlasRefFree {
-    pub top: i16,
-    pub left: i16,
-    pub width: i16,
-    pub height: i16,
+pub struct QuadAtlasGlyph {
+    pub atlas_index: usize,
     pub uv_bot: f32,
     pub uv_left: f32,
     pub uv_width: f32,
     pub uv_height: f32,
-}
-
-#[derive(Copy, Debug, Clone)]
-pub enum AtlasRef {
-    Grid(AtlasRefGrid),
-    Free(AtlasRefFree),
-}
-
-#[derive(Copy, Debug, Clone)]
-pub struct Glyph {
-    pub atlas_index: usize,
-    pub atlas_ref: AtlasRef,
+    pub top: i16,
+    pub left: i16,
+    pub width: i16,
+    pub height: i16,
     pub colored: bool,
+}
+
+#[derive(Copy, Debug, Clone)]
+pub enum AtlasGlyph {
+    Grid(GridAtlasGlyph),
+    Quad(QuadAtlasGlyph),
 }
 
 /// Naïve glyph cache.
@@ -74,10 +71,10 @@ pub struct Glyph {
 /// representations of the same code point.
 pub struct GlyphCache {
     /// Cache of buffered glyphs.
-    pub cache: HashMap<GlyphKey, Glyph, BuildHasherDefault<FnvHasher>>,
+    pub cache: HashMap<GlyphKey, AtlasGlyph, BuildHasherDefault<FnvHasher>>,
 
     /// Cache of buffered cursor glyphs.
-    pub cursor_cache: HashMap<CursorKey, Glyph, BuildHasherDefault<FnvHasher>>,
+    pub cursor_cache: HashMap<CursorKey, AtlasGlyph, BuildHasherDefault<FnvHasher>>,
 
     /// Rasterizer for loading new glyphs.
     rasterizer: Rasterizer,
@@ -229,7 +226,7 @@ impl GlyphCache {
         RasterizedGlyph { wide: glyph_key.wide, zero_width: glyph_key.zero_width, rasterized }
     }
 
-    pub fn get<L>(&mut self, glyph_key: GlyphKey, loader: &mut L) -> &Glyph
+    pub fn get<L>(&mut self, glyph_key: GlyphKey, loader: &mut L) -> &AtlasGlyph
     where
         L: LoadGlyph,
     {

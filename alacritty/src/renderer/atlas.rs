@@ -5,7 +5,7 @@ use crate::gl;
 use crate::gl::types::*;
 use crossfont::BitmapBuffer;
 
-use super::glyph::{AtlasRef, AtlasRefFree, AtlasRefGrid, Glyph, RasterizedGlyph};
+use super::glyph::{GridAtlasGlyph, QuadAtlasGlyph, RasterizedGlyph};
 use super::math::*;
 use super::texture::*;
 
@@ -109,7 +109,10 @@ impl GridAtlas {
     /// Attempt to insert a new rasterized glyph into this atlas
     /// Glyphs which have offsets and sizes that make them not fit into cell dimensions will return
     /// GlyphTooLarge error.
-    pub fn insert(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
+    pub fn insert(
+        &mut self,
+        rasterized: &RasterizedGlyph,
+    ) -> Result<GridAtlasGlyph, AtlasInsertError> {
         if self.free_line >= self.grid_size.y {
             return Err(AtlasInsertError::Full);
         }
@@ -231,11 +234,7 @@ impl GridAtlas {
 
         let line = line as u16;
         let column = column as u16;
-        Ok(Glyph {
-            atlas_index: self.index,
-            colored,
-            atlas_ref: AtlasRef::Grid(AtlasRefGrid { line, column }),
-        })
+        Ok(GridAtlasGlyph { atlas_index: self.index, colored, line, column })
     }
 }
 
@@ -341,7 +340,7 @@ impl Atlas {
     }
 
     /// Insert a RasterizedGlyph into the texture atlas.
-    pub fn insert(&mut self, glyph: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
+    pub fn insert(&mut self, glyph: &RasterizedGlyph) -> Result<QuadAtlasGlyph, AtlasInsertError> {
         let glyph = &glyph.rasterized;
         if glyph.width > self.width || glyph.height > self.height {
             return Err(AtlasInsertError::GlyphTooLarge);
@@ -366,7 +365,7 @@ impl Atlas {
     /// Internal function for use once atlas has been checked for space. GL
     /// errors could still occur at this point if we were checking for them;
     /// hence, the Result.
-    fn insert_inner(&mut self, glyph: &crossfont::RasterizedGlyph) -> Glyph {
+    fn insert_inner(&mut self, glyph: &crossfont::RasterizedGlyph) -> QuadAtlasGlyph {
         let offset_y = self.row_baseline;
         let offset_x = self.row_extent;
         let height = glyph.height as i32;
@@ -413,19 +412,17 @@ impl Atlas {
         let uv_height = height as f32 / self.height as f32;
         let uv_width = width as f32 / self.width as f32;
 
-        Glyph {
+        QuadAtlasGlyph {
             atlas_index: self.index,
             colored,
-            atlas_ref: AtlasRef::Free(AtlasRefFree {
-                top: glyph.top as i16,
-                width: width as i16,
-                height: height as i16,
-                left: glyph.left as i16,
-                uv_bot,
-                uv_left,
-                uv_width,
-                uv_height,
-            }),
+            top: glyph.top as i16,
+            width: width as i16,
+            height: height as i16,
+            left: glyph.left as i16,
+            uv_bot,
+            uv_left,
+            uv_width,
+            uv_height,
         }
     }
 
