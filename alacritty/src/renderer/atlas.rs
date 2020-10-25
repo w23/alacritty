@@ -95,7 +95,7 @@ impl GridAtlas {
             half_padding,
             grid_size,
             free_line: 0,
-            free_column: 0,
+            free_column: 1, // FIXME do not use sentinel 0,0 value as empty, prefere flags instead
         };
         debug!("new atlas with padding: {:?}, {:?}", padding, ret);
         ret
