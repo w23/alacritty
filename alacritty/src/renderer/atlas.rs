@@ -9,8 +9,15 @@ use super::glyph::{AtlasRef, AtlasRefFree, AtlasRefGrid, Glyph, RasterizedGlyph}
 use super::math::*;
 use super::texture::*;
 
-// TODO figure out dynamically based on GL caps (?)
+/// Rationale for 1024x1024 texture:
+/// - for most common case (mostly ASCII-only contents and reasonable font size) this is more than
+///   enough
+/// - it's just 4Mb, so not a huge waste of RAM
+/// Note: for less common case (larger/hidpi font, non-ASCII content) it might be advisable to make
+/// it possible to increase atlas size (TODO)
 static GRID_ATLAS_SIZE: i32 = 1024;
+
+/// Additinal entry padding in percent
 static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
 
 /// Error that can happen when inserting a texture to the Atlas.
@@ -23,34 +30,62 @@ pub enum AtlasInsertError {
     GlyphTooLarge,
 }
 
+/// Grid atlas entry dimensions.
 pub struct CellDims {
+    /// Offset to glyph baseline (i.e. padding).
     pub offset: Vec2<i32>,
+
+    /// Entire cell size.
     pub size: Vec2<i32>,
 }
 
+/// Atlas to store glyphs for grid-based rendering.
+/// Consists of a single table/grid of cells with the same size. Each cell can hold just one glyph.
+/// Each cell can be referenced using just a pair of integer x and y coordinates.
+/// Rasterized glyphs sizes and offsets are "consumed" by placing it accordingly into the atlas
+/// cell.
 #[derive(Debug)]
 pub struct GridAtlas {
+    /// OpenGL texture name/id.
     pub tex: GLuint,
+
+    /// This atlas index/id.
     index: usize,
+
+    /// Atlas entry size.
     cell_size: Vec2<i32>,
+
+    /// Coordinate of glyph origin/baseline relative to atlas cell.
     cell_offset: Vec2<i32>,
+
+    /// Atlas table size in cells
     grid_size: Vec2<i32>,
+
+    /// Additional padding offset
     half_padding: Vec2<i32>,
+
+    /// Next free entry coordinates
     free_line: i32,
     free_column: i32,
 }
 
 impl GridAtlas {
+    /// Create new grid atlas.
+    /// cell_size is the entire precomputed cell size for each element (atlas will also apply
+    /// additional padding, see GRID_ATLAS_PAD_PCT) cell_offset is the position of glyph origin
+    /// relative to cell left-bottom corner.
     pub fn new(index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
-        // FIXME limit atlas size by 256x256 cells
-
         let atlas_cell_size = cell_size + cell_offset;
+
+        // Apply additinal padding
+        // Note that cell_size and cell_offset already encode max of all basic characters sizes and
+        // offsets However, atlas might later encounter larger glyphs, so we'd better make
+        // some additinal space for them
         let padding = (atlas_cell_size * GRID_ATLAS_PAD_PCT + 99) / 100;
         let half_padding = padding / 2;
         let cell_offset = cell_offset + half_padding;
         let atlas_cell_size = atlas_cell_size + padding;
-
-        debug!("atlas padding: {:?}", padding);
+        let grid_size = (Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size).min(Vec2::from(256));
 
         let ret = Self {
             index,
@@ -58,18 +93,22 @@ impl GridAtlas {
             cell_size: atlas_cell_size,
             cell_offset,
             half_padding,
-            grid_size: Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size,
+            grid_size,
             free_line: 0,
-            free_column: 1, // 0,0 = sentinel value, no glyph
+            free_column: 0,
         };
-        debug!("atlas: {:?}", ret);
+        debug!("new atlas with padding: {:?}, {:?}", padding, ret);
         ret
     }
 
+    /// Return atlas entry cell dimensions
     pub fn cell_dims(&self) -> CellDims {
         CellDims { offset: self.cell_offset, size: self.cell_size }
     }
 
+    /// Attempt to insert a new rasterized glyph into this atlas
+    /// Glyphs which have offsets and sizes that make them not fit into cell dimensions will return
+    /// GlyphTooLarge error.
     pub fn insert(&mut self, rasterized: &RasterizedGlyph) -> Result<Glyph, AtlasInsertError> {
         if self.free_line >= self.grid_size.y {
             return Err(AtlasInsertError::Full);
@@ -142,44 +181,34 @@ impl GridAtlas {
             return Err(AtlasInsertError::GlyphTooLarge);
         }
 
-        // FIXME don't do this:
-        let colored;
+        let (colored, format, buf) = match &rasterized.buf {
+            BitmapBuffer::RGB(buf) => (false, gl::RGB, buf),
+            BitmapBuffer::RGBA(buf) => (true, gl::RGBA, buf),
+        };
 
+        // Load data into OpenGL.
+        // TODO: optimize by coalescing. glTexSubImage2D call is VERY expensive, and glBindTexture
+        // can also have non-trivial cost 1. only copy into internal storage
+        // 2. upload once before drawing by column/line subrect
+        // This can substantially improve start-up time, and lower perceptible lag when a bunch of
+        // new glyphs are displayed.
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, self.tex);
-
-            // Load data into OpenGL.
-            let (format, buf) = match &rasterized.buf {
-                BitmapBuffer::RGB(buf) => {
-                    colored = false;
-                    (gl::RGB, buf)
-                },
-                BitmapBuffer::RGBA(buf) => {
-                    colored = true;
-                    (gl::RGBA, buf)
-                },
-            };
-
-            // TODO optimize
-            // 1. only copy into internal storage
-            // 2. upload once before drawing by column/line subrect
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
-                std::cmp::max(0, tex_x), // FIXME
-                std::cmp::max(0, tex_y), // FIXME
-                rasterized.width,        // FIXME limit width with stride
-                // std::cmp::min(rasterized.width, self.cell_size.x),
-                std::cmp::min(rasterized.height, self.cell_size.y),
+                tex_x,
+                tex_y,
+                rasterized.width,
+                rasterized.height,
                 format,
                 gl::UNSIGNED_BYTE,
                 buf.as_ptr() as *const _,
             );
-
             gl::BindTexture(gl::TEXTURE_2D, 0);
         }
 
-        debug!(
+        trace!(
             "'{}' {},{} {}x{} {},{} => l={} c={} {},{}",
             rasterized.c,
             rasterized.left,

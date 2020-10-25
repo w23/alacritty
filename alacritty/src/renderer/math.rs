@@ -10,6 +10,12 @@ impl<T: Copy> Vec2<T> {
     }
 }
 
+impl<T: Copy + Ord> Vec2<T> {
+    pub fn min(self, other: Self) -> Self {
+        Self { x: std::cmp::min(self.x, other.x), y: std::cmp::min(self.y, other.y) }
+    }
+}
+
 impl<T: std::ops::Add<Output = T> + Copy> std::ops::Add for Vec2<T> {
     type Output = Vec2<T>;
 
