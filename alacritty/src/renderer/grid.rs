@@ -57,7 +57,7 @@ impl GridGlyphRenderer {
         let mut vbo: GLuint = 0;
 
         unsafe {
-            //gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            // gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
 
             gl::DepthMask(gl::FALSE);
@@ -193,18 +193,18 @@ impl GridGlyphRenderer {
             match self.grids.last_mut().unwrap().atlas.insert(rasterized) {
                 Ok(glyph) => {
                     return Some(glyph);
-                }
+                },
                 Err(AtlasInsertError::GlyphTooLarge) => {
                     trace!(
                         "Glyph is too large for grid atlas, will render it using quads: {:?}",
                         rasterized
                     );
                     return None;
-                }
+                },
                 Err(AtlasInsertError::Full) => {
                     debug!("GridAtlas is full, creating a new one");
                     self.add_new_pass();
-                }
+                },
             }
         }
     }
@@ -275,11 +275,11 @@ impl GridGlyphRenderer {
             match self.program.poll() {
                 Err(e) => {
                     error!("shader error: {}", e);
-                }
+                },
                 Ok(updated) if updated => {
                     debug!("updated shader: {:?}", self.program);
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -358,7 +358,7 @@ impl GridGlyphRenderer {
                 unsafe {
                     // All further passes need to blend with framebuffer color
                     gl::Enable(gl::BLEND);
-                    //gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
+                    // gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
                     gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE);
                 }
             }
@@ -419,7 +419,8 @@ impl Grid {
     }
 
     fn clear(&mut self) {
-        // TODO Can avoid doing this memset if it's not dirty, but have to track whether it's been cleared then
+        // TODO Can avoid doing this memset if it's not dirty, but have to track whether it's been
+        // cleared then
         self.glyphs.iter_mut().for_each(|x| *x = EMPTY_GLYPH_REF);
         self.dirty = false;
     }

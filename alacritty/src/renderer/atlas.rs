@@ -153,11 +153,11 @@ impl GridAtlas {
                 BitmapBuffer::RGB(buf) => {
                     colored = false;
                     (gl::RGB, buf)
-                }
+                },
                 BitmapBuffer::RGBA(buf) => {
                     colored = true;
                     (gl::RGBA, buf)
-                }
+                },
             };
 
             // TODO optimize
@@ -352,11 +352,11 @@ impl Atlas {
                 BitmapBuffer::RGB(buf) => {
                     colored = false;
                     (gl::RGB, buf)
-                }
+                },
                 BitmapBuffer::RGBA(buf) => {
                     colored = true;
                     (gl::RGBA, buf)
-                }
+                },
             };
 
             gl::TexSubImage2D(

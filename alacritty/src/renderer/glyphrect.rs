@@ -53,11 +53,11 @@ impl QuadGlyphRenderer {
             match group.atlas.insert(rasterized) {
                 Ok(glyph) => {
                     return glyph;
-                }
+                },
                 Err(AtlasInsertError::GlyphTooLarge) => {
                     panic!("FIXME handle this by returning dummy 0 glyph");
-                }
-                Err(AtlasInsertError::Full) => {}
+                },
+                Err(AtlasInsertError::Full) => {},
             }
         }
 
@@ -66,10 +66,10 @@ impl QuadGlyphRenderer {
             Ok(glyph) => glyph,
             Err(AtlasInsertError::GlyphTooLarge) => {
                 panic!("FIXME handle this by returning dummy 0 glyph");
-            }
+            },
             Err(AtlasInsertError::Full) => {
                 panic!("New atlas is already full?!");
-            }
+            },
         }
     }
 
@@ -83,11 +83,11 @@ impl QuadGlyphRenderer {
             match self.program.poll() {
                 Err(e) => {
                     error!("shader error: {}", e);
-                }
+                },
                 Ok(updated) if updated => {
                     debug!("updated shader: {:?}", self.program);
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -170,8 +170,8 @@ impl AtlasGroup {
                 match self.batches.last_mut().unwrap().add(size_info, glyph_rect) {
                     Ok(_) => {
                         return;
-                    }
-                    Err(RectAddError::Full) => {}
+                    },
+                    Err(RectAddError::Full) => {},
                 }
             }
 

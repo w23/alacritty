@@ -46,7 +46,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            }
+            },
         }
     }
 }
@@ -70,7 +70,6 @@ pub struct Renderer {
     quad_glyphs: QuadGlyphRenderer,
 
     // Solid-color rects
-    // FULL BRIDGE
     solid_rects: SolidRectRenderer,
 }
 
@@ -219,7 +218,7 @@ impl<'a> RenderContext<'a> {
                             grid.line as f32,
                             cell.fg,
                         );
-                    }
+                    },
 
                     AtlasRef::Free(free) => {
                         let glyph_quad = GlyphQuad {
@@ -234,9 +233,9 @@ impl<'a> RenderContext<'a> {
                         };
 
                         self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-                    }
+                    },
                 }
-            }
+            },
 
             // こんにちは
             RenderableCellContent::Chars(chars) => {
@@ -294,7 +293,7 @@ impl<'a> RenderContext<'a> {
                         true,
                     );
                 }
-            }
+            },
         };
     }
 
@@ -310,7 +309,7 @@ impl<'a> RenderContext<'a> {
         match glyph.atlas_ref {
             AtlasRef::Grid(atlas_ref) => {
                 self.this.grids.update_cell(cell, glyph.atlas_index, glyph.colored, atlas_ref);
-            }
+            },
             AtlasRef::Free(free) => {
                 let glyph_quad = GlyphQuad {
                     atlas_index: glyph.atlas_index,
@@ -335,7 +334,7 @@ impl<'a> RenderContext<'a> {
                 };
 
                 self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-            }
+            },
         }
     }
 

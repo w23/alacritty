@@ -119,10 +119,11 @@ impl SolidRectRenderer {
 
         self.draw_accumulated();
 
-        // FIXME should we really do this here? Can we depend on next stage properly resetting its state?
+        // FIXME should we really do this here? Can we depend on next stage properly resetting its
+        // state?
         unsafe {
-            // FIXME should we really do this here? Can we depend on next stage properly resetting its state?
-            // Reset data and buffers.
+            // FIXME should we really do this here? Can we depend on next stage properly resetting
+            // its state? Reset data and buffers.
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);

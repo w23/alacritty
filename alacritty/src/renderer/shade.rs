@@ -40,7 +40,7 @@ impl Display for ShaderCreationError {
             ShaderCreationError::Io(err) => write!(f, "Unable to read shader: {}", err),
             ShaderCreationError::Compile(path, log) => {
                 write!(f, "Failed compiling shader at {}: {}", path.display(), log)
-            }
+            },
             ShaderCreationError::Link(log) => write!(f, "Failed linking shader: {}", log),
         }
     }
@@ -227,7 +227,7 @@ impl Shader {
                 self.delete();
                 self.id = new_id;
                 true
-            }
+            },
             _ => false,
         })
     }

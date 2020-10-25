@@ -36,7 +36,7 @@ use crate::event::{Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, RenderContext, Renderer, GlyphCache};
+use crate::renderer::{self, GlyphCache, RenderContext, Renderer};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -473,8 +473,8 @@ impl Display {
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
-				#[cfg(feature = "dump-raw-render-timings")]
-				let start = Instant::now();
+        #[cfg(feature = "dump-raw-render-timings")]
+        let start = Instant::now();
 
         self.renderer.clear(background_color, config.ui_config.background_opacity());
 
@@ -498,7 +498,6 @@ impl Display {
                 // Draw the cell.
                 render_context.update_cell(cell, glyph_cache);
             }
-
         }
 
         let mut message_bar_lines = 0;
@@ -608,13 +607,13 @@ impl Display {
 
         drop(render_context);
 
-				#[cfg(feature = "dump-raw-render-timings")]
-				{
-						self.renderer.finish();
+        #[cfg(feature = "dump-raw-render-timings")]
+        {
+            self.renderer.finish();
 
-						let dt = (Instant::now() - start).as_micros() as u32;
-						std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
-				}
+            let dt = (Instant::now() - start).as_micros() as u32;
+            std::io::Write::write(&mut self.timing_dump_file, &dt.to_ne_bytes()).unwrap();
+        }
 
         // Frame event should be requested before swaping buffers, since it requires surface
         // `commit`, which is done by swap buffers under the hood.
