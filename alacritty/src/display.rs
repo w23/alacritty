@@ -36,7 +36,7 @@ use crate::event::{Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::meter::Meter;
 use crate::renderer::rects::{RenderLines, RenderRect};
-use crate::renderer::{self, simple::RenderContext, simple::SimpleRenderer, GlyphCache};
+use crate::renderer::{self, RenderContext, Renderer, GlyphCache};
 use crate::url::{Url, Urls};
 use crate::window::{self, Window};
 
@@ -154,7 +154,7 @@ pub struct Display {
     #[cfg(not(any(target_os = "macos", windows)))]
     pub wayland_event_queue: Option<EventQueue>,
 
-    renderer: SimpleRenderer,
+    renderer: Renderer,
     glyph_cache: GlyphCache,
     meter: Meter,
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -214,7 +214,7 @@ impl Display {
         let viewport_size = window.inner_size();
 
         // Create renderer.
-        let mut renderer = SimpleRenderer::new()?;
+        let mut renderer = Renderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
             Self::new_glyph_cache(dpr, &mut renderer, config)?;
@@ -316,7 +316,7 @@ impl Display {
 
     fn new_glyph_cache(
         dpr: f64,
-        renderer: &mut SimpleRenderer,
+        renderer: &mut Renderer,
         config: &Config,
     ) -> Result<(GlyphCache, f32, f32), Error> {
         let font = config.ui_config.font.clone();

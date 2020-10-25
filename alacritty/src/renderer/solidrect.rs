@@ -24,6 +24,7 @@ struct Rgba {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
+    // TODO these can certainly be i16
     x: f32,
     y: f32,
     color: Rgba,
