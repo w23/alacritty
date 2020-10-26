@@ -11,18 +11,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Minimum Rust version has been bumped to 1.43.0
 - The snapcraft.yaml file has been removed
+- Updated `setab`/`setaf` capabilities in `alacritty-direct` to use colons
+- WinPTY is now enabled only when targeting MSVC
 
 ### Added
 
 - Secondary device attributes escape (`CSI > 0 c`)
+- Support for colon separated SGR 38/48
+- New Ctrl+C binding to cancel search and leave vi mode
+- Escapes for double underlines (`CSI 4 : 2 m`) and underline reset (`CSI 4 : 0 m`)
+- Configuration file option for sourcing other files (`import`)
+- CLI parameter `--option`/`-o` to override any configuration field
+- Escape sequences to report text area size in pixels (`CSI 14 t`) and in characters (`CSI 18 t`)
+- Support for single line terminals dimensions
+- Right clicking on Wayland's client side decorations will show application menu
+- Escape sequences to enable and disable window urgency hints (`CSI ? 1042 h`, `CSI ? 1042 l`)
 
 ### Changed
 
 - Cursors are now inverted when their fixed color is similar to the cell's background
+- Use working directory of active process instead of shell for SpawnNewInstance action
+- Fallback to normal underline for unsupported underline types in `CSI 4 : ? m` escapes
+- The user's background color is now used as the foreground for the render timer
+- Use yellow/red from the config for error and warning messages instead of fixed colors
+- Existing CLI parameters are now passed to instances spawned using `SpawnNewInstance`
+- Wayland's Client side decorations now use the search bar colors
 
 ### Fixed
 
 - Incorrect window location with negative `window.position` config options
+- Slow rendering performance with HiDPI displays, especially on macOS
+- Keys swallowed during search when pressing them right before releasing backspace
+- Crash when a wrapped line is rotated into the last line
+- Selection wrapping to the top when selecting below the error/warning bar
+- Pasting into clients only supporting `UTF8_STRING` mime type on Wayland
+- Crash when copying/pasting with neither pointer nor keyboard focus on Wayland
+- Crash due to fd leak on Wayland
+- IME window position with fullwidth characters in the search bar
+- Selection expanding over 2 characters when scrolled in history with fullwidth characters in use
+- Selection scrolling not starting when mouse is over the message bar
+- Incorrect text width calculation in message bar when the message contains multibyte characters
+- Remapped caps lock to escape not triggering escape bindings on Wayland
+- Crash when setting overly long title on Wayland
+- Switching in and out of various window states, like Fullscreen, not persisting window size on Wayland
+- Crash when providing 0 for `XCURSOR_SIZE` on Wayland
+- Gap between window and server side decorations on KWIN Wayland
+- Wayland's client side decorations not working after tty switch
+- `Fullscreen` startup mode not working on Wayland
+- Window not being rescaled when changing DPR of the current monitor on Wayland
+- Crash in some cases when pointer isn't presented upon startup on Wayland
+- IME not working on Wayland
+- Crash on startup on GNOME since its 3.37.90 version on Wayland
+- Touchpad scrolling scrolled less than it should on macOS/Wayland on scaled outputs
+- Incorrect modifiers at startup on X11
+- `Add` and `Subtract` keys are now named `NumpadAdd` and `NumpadSubtract` respectively
+- Feature checking when cross compiling between different operating systems
+- Crash when writing to the clipboard fails on Wayland
 
 ## 0.5.0
 
@@ -32,6 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Prebuilt Linux binaries have been removed
 - Added manpage, terminfo, and completions to macOS application bundle
 - On Linux/BSD the build will fail without Fontconfig installed, instead of building it from source
+- Minimum FreeType version has been bumped to 2.8 on Linux/BSD
 
 ### Added
 

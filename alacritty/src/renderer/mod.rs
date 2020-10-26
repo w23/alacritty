@@ -26,7 +26,6 @@ use alacritty_terminal::thread;
 
 use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::{Delta, UIConfig};
-use crate::config::window::{StartupMode, WindowConfig};
 use crate::cursor;
 use crate::gl;
 use crate::gl::types::*;
@@ -124,11 +123,11 @@ pub struct RectShaderProgram {
 #[derive(Copy, Debug, Clone)]
 pub struct Glyph {
     tex_id: GLuint,
-    colored: bool,
-    top: f32,
-    left: f32,
-    width: f32,
-    height: f32,
+    multicolor: u8,
+    top: i16,
+    left: i16,
+    width: i16,
+    height: i16,
     uv_bot: f32,
     uv_left: f32,
     uv_width: f32,
@@ -231,7 +230,7 @@ impl GlyphCache {
             if desc == regular_desc {
                 regular
             } else {
-                rasterizer.load_font(&desc, size).unwrap_or_else(|_| regular)
+                rasterizer.load_font(&desc, size).unwrap_or(regular)
             }
         };
 
@@ -358,65 +357,37 @@ impl GlyphCache {
 
         rasterizer.metrics(regular, font.size)
     }
-
-    pub fn calculate_dimensions(
-        window_config: &WindowConfig,
-        dpr: f64,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<(u32, u32)> {
-        let dimensions = window_config.dimensions;
-
-        if dimensions.columns_u32() == 0
-            || dimensions.lines_u32() == 0
-            || window_config.startup_mode != StartupMode::Windowed
-        {
-            return None;
-        }
-
-        let padding_x = f64::from(window_config.padding.x) * dpr;
-        let padding_y = f64::from(window_config.padding.y) * dpr;
-
-        // Calculate new size based on cols/lines specified in config.
-        let grid_width = cell_width as u32 * dimensions.columns_u32();
-        let grid_height = cell_height as u32 * dimensions.lines_u32();
-
-        let width = padding_x.mul_add(2., f64::from(grid_width)).floor();
-        let height = padding_y.mul_add(2., f64::from(grid_height)).floor();
-
-        Some((width as u32, height as u32))
-    }
 }
 
 #[derive(Debug)]
 #[repr(C)]
 struct InstanceData {
     // Coords.
-    col: f32,
-    row: f32,
+    col: u16,
+    row: u16,
     // Glyph offset.
-    left: f32,
-    top: f32,
-    // Glyph scale.
-    width: f32,
-    height: f32,
-    // uv offset.
+    left: i16,
+    top: i16,
+    // Glyph size.
+    width: i16,
+    height: i16,
+    // UV offset.
     uv_left: f32,
     uv_bot: f32,
     // uv scale.
     uv_width: f32,
     uv_height: f32,
     // Color.
-    r: f32,
-    g: f32,
-    b: f32,
-    // Background color.
-    bg_r: f32,
-    bg_g: f32,
-    bg_b: f32,
-    bg_a: f32,
-    // Flag indicating that glyph uses multiple colors, like an Emoji.
+    r: u8,
+    g: u8,
+    b: u8,
+    // Flag indicating that a glyph uses multiple colors; like an Emoji.
     multicolor: u8,
+    // Background color.
+    bg_r: u8,
+    bg_g: u8,
+    bg_b: u8,
+    bg_a: u8,
 }
 
 #[derive(Debug)]
@@ -471,8 +442,8 @@ impl Batch {
         }
 
         self.instances.push(InstanceData {
-            col: cell.column.0 as f32,
-            row: cell.line.0 as f32,
+            col: cell.column.0 as u16,
+            row: cell.line.0 as u16,
 
             top: glyph.top,
             left: glyph.left,
@@ -484,15 +455,15 @@ impl Batch {
             uv_width: glyph.uv_width,
             uv_height: glyph.uv_height,
 
-            r: f32::from(cell.fg.r),
-            g: f32::from(cell.fg.g),
-            b: f32::from(cell.fg.b),
+            r: cell.fg.r,
+            g: cell.fg.g,
+            b: cell.fg.b,
 
-            bg_r: f32::from(cell.bg.r),
-            bg_g: f32::from(cell.bg.g),
-            bg_b: f32::from(cell.bg.b),
-            bg_a: cell.bg_alpha,
-            multicolor: glyph.colored as u8,
+            bg_r: cell.bg.r,
+            bg_g: cell.bg.g,
+            bg_b: cell.bg.b,
+            bg_a: (cell.bg_alpha * 255.0) as u8,
+            multicolor: glyph.multicolor,
         });
     }
 
@@ -581,72 +552,49 @@ impl QuadRenderer {
                 ptr::null(),
                 gl::STREAM_DRAW,
             );
+
+            let mut index = 0;
+            let mut size = 0;
+
+            macro_rules! add_attr {
+                ($count:expr, $gl_type:expr, $type:ty) => {
+                    gl::VertexAttribPointer(
+                        index,
+                        $count,
+                        $gl_type,
+                        gl::FALSE,
+                        size_of::<InstanceData>() as i32,
+                        size as *const _,
+                    );
+                    gl::EnableVertexAttribArray(index);
+                    gl::VertexAttribDivisor(index, 1);
+
+                    #[allow(unused_assignments)]
+                    {
+                        size += $count * size_of::<$type>();
+                        index += 1;
+                    }
+                };
+            }
+
             // Coords.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-            gl::VertexAttribDivisor(0, 1);
-            // Glyph offset.
-            gl::VertexAttribPointer(
-                1,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (2 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribDivisor(1, 1);
-            // uv.
-            gl::VertexAttribPointer(
-                2,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (6 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribDivisor(2, 1);
-            // Color.
-            gl::VertexAttribPointer(
-                3,
-                3,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (10 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(3);
-            gl::VertexAttribDivisor(3, 1);
+            add_attr!(2, gl::UNSIGNED_SHORT, u16);
+
+            // Glyph offset and size.
+            add_attr!(4, gl::SHORT, i16);
+
+            // UV offset.
+            add_attr!(4, gl::FLOAT, f32);
+
+            // Color and multicolor flag.
+            //
+            // These are packed together because of an OpenGL driver issue on macOS, which caused a
+            // `vec3(u8)` text color and a `u8` multicolor flag to increase the rendering time by a
+            // huge margin.
+            add_attr!(4, gl::UNSIGNED_BYTE, u8);
+
             // Background color.
-            gl::VertexAttribPointer(
-                4,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (13 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(4);
-            gl::VertexAttribDivisor(4, 1);
-            // Multicolor flag.
-            gl::VertexAttribPointer(
-                5,
-                1,
-                gl::BYTE,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (17 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(5);
-            gl::VertexAttribDivisor(5, 1);
+            add_attr!(4, gl::UNSIGNED_BYTE, u8);
 
             // Rectangle setup.
             gl::GenVertexArrays(1, &mut rect_vao);
@@ -728,7 +676,7 @@ impl QuadRenderer {
             gl::UseProgram(self.rect_program.id);
 
             // Remove padding from viewport.
-            gl::Viewport(0, 0, props.width as i32, props.height as i32);
+            gl::Viewport(0, 0, props.width() as i32, props.height() as i32);
 
             // Change blending strategy.
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
@@ -763,10 +711,10 @@ impl QuadRenderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindVertexArray(0);
 
-            let padding_x = props.padding_x as i32;
-            let padding_y = props.padding_y as i32;
-            let width = props.width as i32;
-            let height = props.height as i32;
+            let padding_x = props.padding_x() as i32;
+            let padding_y = props.padding_y() as i32;
+            let width = props.width() as i32;
+            let height = props.height() as i32;
             gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
 
             // Disable program.
@@ -844,10 +792,10 @@ impl QuadRenderer {
                 unsafe {
                     gl::UseProgram(program.id);
                     program.update_projection(
-                        props.width,
-                        props.height,
-                        props.padding_x,
-                        props.padding_y,
+                        props.width(),
+                        props.height(),
+                        props.padding_x(),
+                        props.padding_y(),
                     );
                     gl::UseProgram(0);
                 }
@@ -870,15 +818,20 @@ impl QuadRenderer {
         // Viewport.
         unsafe {
             gl::Viewport(
-                size.padding_x as i32,
-                size.padding_y as i32,
-                size.width as i32 - 2 * size.padding_x as i32,
-                size.height as i32 - 2 * size.padding_y as i32,
+                size.padding_x() as i32,
+                size.padding_y() as i32,
+                size.width() as i32 - 2 * size.padding_x() as i32,
+                size.height() as i32 - 2 * size.padding_y() as i32,
             );
 
             // Update projection.
             gl::UseProgram(self.program.id);
-            self.program.update_projection(size.width, size.height, size.padding_x, size.padding_y);
+            self.program.update_projection(
+                size.width(),
+                size.height(),
+                size.padding_x(),
+                size.padding_y(),
+            );
             gl::UseProgram(0);
         }
     }
@@ -893,8 +846,8 @@ impl QuadRenderer {
         }
 
         // Calculate rectangle position.
-        let center_x = size.width / 2.;
-        let center_y = size.height / 2.;
+        let center_x = size.width() / 2.;
+        let center_y = size.height() / 2.;
         let x = (rect.x - center_x) / center_x;
         let y = -(rect.y - center_y) / center_y;
         let width = rect.width / center_x;
@@ -1089,7 +1042,7 @@ impl<'a> RenderApi<'a> {
             // right side of the preceding character. Since we render the
             // zero-width characters inside the preceding character, the
             // anchor has been moved to the right by one cell.
-            glyph.left += glyph_cache.metrics.average_advance as f32;
+            glyph.left += glyph_cache.metrics.average_advance as i16;
 
             self.add_render_item(cell, &glyph);
         }
@@ -1121,15 +1074,15 @@ fn load_glyph(
         },
         Err(AtlasInsertError::GlyphTooLarge) => Glyph {
             tex_id: atlas[*current_atlas].id,
-            colored: false,
-            top: 0.0,
-            left: 0.0,
-            width: 0.0,
-            height: 0.0,
-            uv_bot: 0.0,
-            uv_left: 0.0,
-            uv_width: 0.0,
-            uv_height: 0.0,
+            multicolor: 0,
+            top: 0,
+            left: 0,
+            width: 0,
+            height: 0,
+            uv_bot: 0.,
+            uv_left: 0.,
+            uv_width: 0.,
+            uv_height: 0.,
         },
     }
 }
@@ -1242,8 +1195,6 @@ impl TextShaderProgram {
         let offset_x = -1.;
         let offset_y = 1.;
 
-        info!("Width: {}, Height: {}", width, height);
-
         unsafe {
             gl::Uniform4f(self.u_projection, offset_x, offset_y, scale_x, scale_y);
         }
@@ -1251,7 +1202,7 @@ impl TextShaderProgram {
 
     fn set_term_uniforms(&self, props: &SizeInfo) {
         unsafe {
-            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
+            gl::Uniform2f(self.u_cell_dim, props.cell_width(), props.cell_height());
         }
     }
 
@@ -1590,7 +1541,7 @@ impl Atlas {
         let offset_x = self.row_extent;
         let height = glyph.height as i32;
         let width = glyph.width as i32;
-        let colored;
+        let multicolor;
 
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, self.id);
@@ -1598,11 +1549,11 @@ impl Atlas {
             // Load data into OpenGL.
             let (format, buf) = match &glyph.buf {
                 BitmapBuffer::RGB(buf) => {
-                    colored = false;
+                    multicolor = false;
                     (gl::RGB, buf)
                 },
                 BitmapBuffer::RGBA(buf) => {
-                    colored = true;
+                    multicolor = true;
                     (gl::RGBA, buf)
                 },
             };
@@ -1637,11 +1588,11 @@ impl Atlas {
 
         Glyph {
             tex_id: self.id,
-            colored,
-            top: glyph.top as f32,
-            width: width as f32,
-            height: height as f32,
-            left: glyph.left as f32,
+            multicolor: multicolor as u8,
+            top: glyph.top as i16,
+            left: glyph.left as i16,
+            width: width as i16,
+            height: height as i16,
             uv_bot,
             uv_left,
             uv_width,

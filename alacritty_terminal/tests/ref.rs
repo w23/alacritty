@@ -65,6 +65,8 @@ ref_tests! {
     wrapline_alt_toggle
     saved_cursor
     saved_cursor_alt
+    sgr
+    underline
 }
 
 fn read_u8<P>(path: P) -> Vec<u8>
@@ -100,7 +102,7 @@ fn ref_test(dir: &Path) {
     let mut config = MockConfig::default();
     config.scrolling.set_history(ref_config.history_size);
 
-    let mut terminal = Term::new(&config, &size, Mock);
+    let mut terminal = Term::new(&config, size, Mock);
     let mut parser = ansi::Processor::new();
 
     for byte in recording {

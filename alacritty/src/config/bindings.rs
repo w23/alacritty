@@ -368,6 +368,7 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         Escape,                        +TermMode::VI; Action::ClearSelection;
         I,                             +TermMode::VI; Action::ScrollToBottom;
         I,                             +TermMode::VI; Action::ToggleViMode;
+        C,      ModifiersState::CTRL,  +TermMode::VI; Action::ToggleViMode;
         Y,      ModifiersState::CTRL,  +TermMode::VI; Action::ScrollLineUp;
         E,      ModifiersState::CTRL,  +TermMode::VI; Action::ScrollLineDown;
         G,                             +TermMode::VI; Action::ScrollToTop;
@@ -493,9 +494,10 @@ fn common_keybindings() -> Vec<KeyBinding> {
         Insert,   ModifiersState::SHIFT, ~TermMode::VI; Action::PasteSelection;
         Key0,     ModifiersState::CTRL;  Action::ResetFontSize;
         Equals,   ModifiersState::CTRL;  Action::IncreaseFontSize;
-        Add,      ModifiersState::CTRL;  Action::IncreaseFontSize;
-        Subtract, ModifiersState::CTRL;  Action::DecreaseFontSize;
-        Minus,    ModifiersState::CTRL;  Action::DecreaseFontSize;
+        Plus,     ModifiersState::CTRL;  Action::IncreaseFontSize;
+        NumpadAdd,      ModifiersState::CTRL;  Action::IncreaseFontSize;
+        Minus,          ModifiersState::CTRL;  Action::DecreaseFontSize;
+        NumpadSubtract, ModifiersState::CTRL;  Action::DecreaseFontSize;
     )
 }
 
@@ -520,8 +522,10 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         KeyBinding;
         Key0,   ModifiersState::LOGO; Action::ResetFontSize;
         Equals, ModifiersState::LOGO; Action::IncreaseFontSize;
-        Add,    ModifiersState::LOGO; Action::IncreaseFontSize;
-        Minus,  ModifiersState::LOGO; Action::DecreaseFontSize;
+        Plus,   ModifiersState::LOGO; Action::IncreaseFontSize;
+        NumpadAdd,      ModifiersState::LOGO;  Action::IncreaseFontSize;
+        Minus,          ModifiersState::LOGO;  Action::DecreaseFontSize;
+        NumpadSubtract, ModifiersState::LOGO;  Action::DecreaseFontSize;
         Insert, ModifiersState::SHIFT, ~TermMode::VI; Action::Esc("\x1b[2;2~".into());
         K, ModifiersState::LOGO, ~TermMode::VI; Action::Esc("\x0c".into());
         V, ModifiersState::LOGO, ~TermMode::VI; Action::Paste;

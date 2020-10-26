@@ -19,7 +19,7 @@ use glutin::dpi::PhysicalSize;
 use glutin::event::{ElementState, Event as GlutinEvent, ModifiersState, MouseButton, WindowEvent};
 use glutin::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
 use glutin::platform::desktop::EventLoopExtDesktop;
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use glutin::platform::unix::EventLoopWindowTargetExtUnix;
 use log::info;
 use serde_json as json;
@@ -39,7 +39,7 @@ use alacritty_terminal::term::{ClipboardType, SizeInfo, Term, TermMode};
 #[cfg(not(windows))]
 use alacritty_terminal::tty;
 
-use crate::cli::Options;
+use crate::cli::Options as CLIOptions;
 use crate::clipboard::Clipboard;
 use crate::config;
 use crate::config::Config;
@@ -139,6 +139,7 @@ pub struct ActionContext<'a, N, T> {
     pub urls: &'a Urls,
     pub scheduler: &'a mut Scheduler,
     pub search_state: &'a mut SearchState,
+    cli_options: &'a CLIOptions,
     font_size: &'a mut Size,
 }
 
@@ -170,9 +171,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         } else if self.mouse().left_button_state == ElementState::Pressed
             || self.mouse().right_button_state == ElementState::Pressed
         {
-            let (x, y) = (self.mouse().x, self.mouse().y);
-            let size_info = self.size_info();
-            let point = size_info.pixels_to_coords(x, y);
+            let point = self.size_info().pixels_to_coords(self.mouse().x, self.mouse().y);
             let cell_side = self.mouse().cell_side;
             self.update_selection(Point { line: point.line, col: point.col }, cell_side);
         }
@@ -195,20 +194,27 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         self.terminal.dirty = true;
     }
 
-    fn update_selection(&mut self, point: Point, side: Side) {
-        let point = self.terminal.visible_to_buffer(point);
+    fn update_selection(&mut self, mut point: Point, side: Side) {
+        let mut selection = match self.terminal.selection.take() {
+            Some(selection) => selection,
+            None => return,
+        };
 
-        // Update selection if one exists.
-        let vi_mode = self.terminal.mode().contains(TermMode::VI);
-        if let Some(selection) = &mut self.terminal.selection {
-            selection.update(point, side);
+        // Treat motion over message bar like motion over the last line.
+        point.line = min(point.line, self.terminal.screen_lines() - 1);
 
-            if vi_mode {
-                selection.include_all();
-            }
+        // Update selection.
+        let absolute_point = self.terminal.visible_to_buffer(point);
+        selection.update(absolute_point, side);
 
-            self.terminal.dirty = true;
+        // Move vi cursor and expand selection.
+        if self.terminal.mode().contains(TermMode::VI) {
+            self.terminal.vi_mode_cursor.point = point;
+            selection.include_all();
         }
+
+        self.terminal.selection = Some(selection);
+        self.terminal.dirty = true;
     }
 
     fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
@@ -293,23 +299,43 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn spawn_new_instance(&mut self) {
-        let alacritty = env::args().next().unwrap();
+        let mut env_args = env::args();
+        let alacritty = env_args.next().unwrap();
 
         #[cfg(unix)]
-        let args = {
-            #[cfg(not(target_os = "freebsd"))]
-            let proc_prefix = "";
-            #[cfg(target_os = "freebsd")]
-            let proc_prefix = "/compat/linux";
-            let link_path = format!("{}/proc/{}/cwd", proc_prefix, tty::child_pid());
-            if let Ok(path) = fs::read_link(link_path) {
-                vec!["--working-directory".into(), path]
-            } else {
-                Vec::new()
+        let mut args = {
+            // Use working directory of controlling process, or fallback to initial shell.
+            let mut pid = unsafe { libc::tcgetpgrp(tty::master_fd()) };
+            if pid < 0 {
+                pid = tty::child_pid();
             }
+
+            #[cfg(not(target_os = "freebsd"))]
+            let link_path = format!("/proc/{}/cwd", pid);
+            #[cfg(target_os = "freebsd")]
+            let link_path = format!("/compat/linux/proc/{}/cwd", pid);
+
+            // Add the current working directory as parameter.
+            fs::read_link(link_path)
+                .map(|path| vec!["--working-directory".into(), path])
+                .unwrap_or_default()
         };
+
         #[cfg(not(unix))]
-        let args: Vec<String> = Vec::new();
+        let mut args: Vec<PathBuf> = Vec::new();
+
+        let working_directory_set = !args.is_empty();
+
+        // Reuse the arguments passed to Alacritty for the new instance.
+        while let Some(arg) = env_args.next() {
+            // Drop working directory from existing parameters.
+            if working_directory_set && arg == "--working-directory" {
+                let _ = env_args.next();
+                continue;
+            }
+
+            args.push(arg.into());
+        }
 
         start_daemon(&alacritty, &args);
     }
@@ -384,14 +410,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.goto_match(None);
         }
 
-        // Move vi cursor down if resize will pull content from history.
-        if self.terminal.history_size() != 0 && self.terminal.grid().display_offset() == 0 {
-            self.terminal.vi_mode_cursor.point.line += 1;
-        }
-
-        self.display_update_pending.dirty = true;
-        self.search_state.regex = None;
-        self.terminal.dirty = true;
+        self.exit_search();
     }
 
     #[inline]
@@ -403,14 +422,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.search_reset_state();
         }
 
-        // Move vi cursor down if resize will pull from history.
-        if self.terminal.history_size() != 0 && self.terminal.grid().display_offset() == 0 {
-            self.terminal.vi_mode_cursor.point.line += 1;
-        }
-
-        self.display_update_pending.dirty = true;
-        self.search_state.regex = None;
-        self.terminal.dirty = true;
+        self.exit_search();
     }
 
     #[inline]
@@ -602,6 +614,21 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         self.search_state.regex = Some(regex);
     }
 
+    /// Close the search bar.
+    fn exit_search(&mut self) {
+        // Move vi cursor down if resize will pull content from history.
+        if self.terminal.history_size() != 0
+            && self.terminal.grid().display_offset() == 0
+            && self.terminal.screen_lines() > self.terminal.vi_mode_cursor.point.line + 1
+        {
+            self.terminal.vi_mode_cursor.point.line += 1;
+        }
+
+        self.display_update_pending.dirty = true;
+        self.search_state.regex = None;
+        self.terminal.dirty = true;
+    }
+
     /// Get the absolute position of the search origin.
     ///
     /// This takes the relative motion of the viewport since the start of the search into account.
@@ -642,7 +669,7 @@ pub struct Mouse {
     pub cell_side: Side,
     pub lines_scrolled: f32,
     pub block_url_launcher: bool,
-    pub inside_grid: bool,
+    pub inside_text_area: bool,
 }
 
 impl Default for Mouse {
@@ -662,7 +689,7 @@ impl Default for Mouse {
             cell_side: Side::Left,
             lines_scrolled: 0.,
             block_url_launcher: false,
-            inside_grid: false,
+            inside_text_area: false,
         }
     }
 }
@@ -684,6 +711,7 @@ pub struct Processor<N> {
     font_size: Size,
     event_queue: Vec<GlutinEvent<'static, Event>>,
     search_state: SearchState,
+    cli_options: CLIOptions,
 }
 
 impl<N: Notify + OnResize> Processor<N> {
@@ -695,6 +723,7 @@ impl<N: Notify + OnResize> Processor<N> {
         message_buffer: MessageBuffer,
         config: Config,
         display: Display,
+        cli_options: CLIOptions,
     ) -> Processor<N> {
         #[cfg(not(any(target_os = "macos", windows)))]
         let clipboard = Clipboard::new(display.window.wayland_display());
@@ -714,12 +743,13 @@ impl<N: Notify + OnResize> Processor<N> {
             event_queue: Vec::new(),
             clipboard,
             search_state: SearchState::new(),
+            cli_options,
         }
     }
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     fn event_queue_empty(&mut self) -> bool {
         let wayland_event_queue = match self.display.wayland_event_queue.as_mut() {
             Some(wayland_event_queue) => wayland_event_queue,
@@ -737,7 +767,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(not(feature = "wayland"), target_os = "macos", windows))]
     fn event_queue_empty(&mut self) -> bool {
         self.event_queue.is_empty()
     }
@@ -817,6 +847,7 @@ impl<N: Notify + OnResize> Processor<N> {
                 urls: &self.display.urls,
                 scheduler: &mut scheduler,
                 search_state: &mut self.search_state,
+                cli_options: &self.cli_options,
                 event_loop,
             };
             let mut processor = input::Processor::new(context, &self.display.highlighted_url);
@@ -832,7 +863,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
             // Skip rendering on Wayland until we get frame event from compositor.
             #[cfg(not(any(target_os = "macos", windows)))]
-            if event_loop.is_wayland() && !self.display.window.should_draw.load(Ordering::Relaxed) {
+            if !self.display.is_x11 && !self.display.window.should_draw.load(Ordering::Relaxed) {
                 return;
             }
 
@@ -884,7 +915,7 @@ impl<N: Notify + OnResize> Processor<N> {
                     // Resize to event's dimensions, since no resize event is emitted on Wayland.
                     display_update_pending.set_dimensions(PhysicalSize::new(width, height));
 
-                    processor.ctx.size_info.dpr = scale_factor;
+                    processor.ctx.window.dpr = scale_factor;
                     processor.ctx.terminal.dirty = true;
                 },
                 Event::Message(message) => {
@@ -912,7 +943,9 @@ impl<N: Notify + OnResize> Processor<N> {
                     TerminalEvent::Bell => {
                         let bell_command = processor.ctx.config.bell().command.as_ref();
                         let _ = bell_command.map(|cmd| start_daemon(cmd.program(), cmd.args()));
-                        processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        if processor.ctx.terminal.mode().contains(TermMode::URGENCY_HINTS) {
+                            processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        }
                     },
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
                         processor.ctx.clipboard.store(clipboard_type, content);
@@ -981,7 +1014,7 @@ impl<N: Notify + OnResize> Processor<N> {
                         processor.ctx.write_to_pty((path + " ").into_bytes());
                     },
                     WindowEvent::CursorLeft { .. } => {
-                        processor.ctx.mouse.inside_grid = false;
+                        processor.ctx.mouse.inside_text_area = false;
 
                         if processor.highlighted_url.is_some() {
                             processor.ctx.terminal.dirty = true;
@@ -1013,18 +1046,18 @@ impl<N: Notify + OnResize> Processor<N> {
     /// Check if an event is irrelevant and can be skipped.
     fn skip_event(event: &GlutinEvent<Event>) -> bool {
         match event {
-            GlutinEvent::WindowEvent { event, .. } => match event {
+            GlutinEvent::WindowEvent { event, .. } => matches!(
+                event,
                 WindowEvent::KeyboardInput { is_synthetic: true, .. }
-                | WindowEvent::TouchpadPressure { .. }
-                | WindowEvent::CursorEntered { .. }
-                | WindowEvent::AxisMotion { .. }
-                | WindowEvent::HoveredFileCancelled
-                | WindowEvent::Destroyed
-                | WindowEvent::HoveredFile(_)
-                | WindowEvent::Touch(_)
-                | WindowEvent::Moved(_) => true,
-                _ => false,
-            },
+                    | WindowEvent::TouchpadPressure { .. }
+                    | WindowEvent::CursorEntered { .. }
+                    | WindowEvent::AxisMotion { .. }
+                    | WindowEvent::HoveredFileCancelled
+                    | WindowEvent::Destroyed
+                    | WindowEvent::HoveredFile(_)
+                    | WindowEvent::Touch(_)
+                    | WindowEvent::Moved(_)
+            ),
             GlutinEvent::Suspended { .. }
             | GlutinEvent::NewEvents { .. }
             | GlutinEvent::MainEventsCleared
@@ -1042,13 +1075,10 @@ impl<N: Notify + OnResize> Processor<N> {
             processor.ctx.display_update_pending.dirty = true;
         }
 
-        let config = match config::reload_from(&path) {
+        let config = match config::reload(&path, &processor.ctx.cli_options) {
             Ok(config) => config,
             Err(_) => return,
         };
-
-        let options = Options::new();
-        let config = options.into_config(config);
 
         processor.ctx.terminal.update_config(&config);
 
@@ -1071,7 +1101,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
         // Update display if padding options were changed.
         let window_config = &processor.ctx.config.ui_config.window;
-        if window_config.padding != config.ui_config.window.padding
+        if window_config.padding(1.) != config.ui_config.window.padding(1.)
             || window_config.dynamic_padding != config.ui_config.window.dynamic_padding
         {
             processor.ctx.display_update_pending.dirty = true;
@@ -1084,7 +1114,7 @@ impl<N: Notify + OnResize> Processor<N> {
             processor.ctx.window.set_title(&config.ui_config.window.title);
         }
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         if processor.ctx.event_loop.is_wayland() {
             processor.ctx.window.set_wayland_theme(&config.colors);
         }

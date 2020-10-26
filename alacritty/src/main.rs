@@ -8,6 +8,9 @@
 // See https://msdn.microsoft.com/en-us/library/4cc7ya5b.aspx for more details.
 #![windows_subsystem = "windows"]
 
+#[cfg(not(any(feature = "x11", feature = "wayland", target_os = "macos", windows)))]
+compile_error!(r#"at least one of the "x11"/"wayland" features must be enabled"#);
+
 #[cfg(target_os = "macos")]
 use std::env;
 use std::error::Error;
@@ -45,7 +48,7 @@ mod scheduler;
 mod url;
 mod window;
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 mod wayland_theme;
 
 mod gl {
@@ -54,7 +57,7 @@ mod gl {
 }
 
 use crate::cli::Options;
-use crate::config::monitor::Monitor;
+use crate::config::monitor;
 use crate::config::Config;
 use crate::display::Display;
 use crate::event::{Event, EventProxy, Processor};
@@ -83,9 +86,7 @@ fn main() {
         .expect("Unable to initialize logger");
 
     // Load configuration file.
-    let config_path = options.config_path().or_else(config::installed_config);
-    let config = config_path.map(config::load_from).unwrap_or_else(Config::default);
-    let config = options.into_config(config);
+    let config = config::load(&options);
 
     // Update the log level from config.
     log::set_max_level(config.ui_config.debug.log_level);
@@ -101,7 +102,7 @@ fn main() {
     let persistent_logging = config.ui_config.debug.persistent_logging;
 
     // Run Alacritty.
-    if let Err(err) = run(window_event_loop, config) {
+    if let Err(err) = run(window_event_loop, config, options) {
         error!("Alacritty encountered an unrecoverable error:\n\n\t{}\n", err);
         std::process::exit(1);
     }
@@ -118,12 +119,16 @@ fn main() {
 ///
 /// Creates a window, the terminal state, PTY, I/O event loop, input processor,
 /// config change monitor, and runs the main display loop.
-fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), Box<dyn Error>> {
+fn run(
+    window_event_loop: GlutinEventLoop<Event>,
+    config: Config,
+    options: Options,
+) -> Result<(), Box<dyn Error>> {
     info!("Welcome to Alacritty");
 
-    match &config.config_path {
-        Some(config_path) => info!("Configuration loaded from \"{}\"", config_path.display()),
-        None => info!("No configuration file found"),
+    info!("Configuration files loaded from:");
+    for path in &config.ui_config.config_paths {
+        info!("  \"{}\"", path.display());
     }
 
     // Set environment variables.
@@ -136,14 +141,18 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // The display manages a window and can draw the terminal.
     let display = Display::new(&config, &window_event_loop)?;
 
-    info!("PTY dimensions: {:?} x {:?}", display.size_info.lines(), display.size_info.cols());
+    info!(
+        "PTY dimensions: {:?} x {:?}",
+        display.size_info.screen_lines(),
+        display.size_info.cols()
+    );
 
     // Create the terminal.
     //
     // This object contains all of the state about what's being displayed. It's
     // wrapped in a clonable mutex since both the I/O loop and display need to
     // access it.
-    let terminal = Term::new(&config, &display.size_info, event_proxy.clone());
+    let terminal = Term::new(&config, display.size_info, event_proxy.clone());
     let terminal = Arc::new(FairMutex::new(terminal));
 
     // Create the PTY.
@@ -151,10 +160,7 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // The PTY forks a process to run the shell on the slave side of the
     // pseudoterminal. A file descriptor for the master side is retained for
     // reading/writing to the shell.
-    #[cfg(not(any(target_os = "macos", windows)))]
     let pty = tty::new(&config, &display.size_info, display.window.x11_window_id());
-    #[cfg(any(target_os = "macos", windows))]
-    let pty = tty::new(&config, &display.size_info, None);
 
     // Create the pseudoterminal I/O loop.
     //
@@ -179,15 +185,20 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // The monitor watches the config file for changes and reloads it. Pending
     // config changes are processed in the main loop.
     if config.ui_config.live_config_reload() {
-        config.config_path.as_ref().map(|path| Monitor::new(path, event_proxy.clone()));
+        monitor::watch(config.ui_config.config_paths.clone(), event_proxy);
     }
 
     // Setup storage for message UI.
     let message_buffer = MessageBuffer::new();
 
     // Event processor.
-    let mut processor =
-        Processor::new(event_loop::Notifier(loop_tx.clone()), message_buffer, config, display);
+    let mut processor = Processor::new(
+        event_loop::Notifier(loop_tx.clone()),
+        message_buffer,
+        config,
+        display,
+        options,
+    );
 
     // Kick off the I/O thread.
     let io_thread = event_loop.spawn();

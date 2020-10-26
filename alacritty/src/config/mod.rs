@@ -1,25 +1,32 @@
-use std::env;
 use std::fmt::{self, Display, Formatter};
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{env, fs, io};
 
-use log::{error, warn};
+use log::{error, info, warn};
+use serde::Deserialize;
+use serde_yaml::mapping::Mapping;
+use serde_yaml::Value;
 
 use alacritty_terminal::config::{Config as TermConfig, LOG_TARGET_CONFIG};
 
-mod bindings;
 pub mod debug;
 pub mod font;
 pub mod monitor;
-mod mouse;
+pub mod serde_utils;
 pub mod ui_config;
 pub mod window;
 
+mod bindings;
+mod mouse;
+
+use crate::cli::Options;
 pub use crate::config::bindings::{Action, Binding, Key, ViAction};
 #[cfg(test)]
 pub use crate::config::mouse::{ClickHandler, Mouse};
 use crate::config::ui_config::UIConfig;
+
+/// Maximum number of depth for the configuration file imports.
+const IMPORT_RECURSION_LIMIT: usize = 5;
 
 pub type Config = TermConfig<UIConfig>;
 
@@ -88,6 +95,144 @@ impl From<serde_yaml::Error> for Error {
     }
 }
 
+/// Load the configuration file.
+pub fn load(options: &Options) -> Config {
+    let config_options = options.config_options().clone();
+    let config_path = options.config_path().or_else(installed_config);
+
+    if config_path.is_none() {
+        info!(target: LOG_TARGET_CONFIG, "No config file found; using default");
+    }
+
+    // Load the config using the following fallback behavior:
+    //  - Config path + CLI overrides
+    //  - CLI overrides
+    //  - Default
+    let mut config = config_path
+        .and_then(|config_path| load_from(&config_path, config_options.clone()).ok())
+        .unwrap_or_else(|| Config::deserialize(config_options).unwrap_or_default());
+
+    // Override config with CLI options.
+    options.override_config(&mut config);
+
+    config
+}
+
+/// Attempt to reload the configuration file.
+pub fn reload(config_path: &PathBuf, options: &Options) -> Result<Config> {
+    // Load config, propagating errors.
+    let config_options = options.config_options().clone();
+    let mut config = load_from(&config_path, config_options)?;
+
+    // Override config with CLI options.
+    options.override_config(&mut config);
+
+    Ok(config)
+}
+
+/// Load configuration file and log errors.
+fn load_from(path: &PathBuf, cli_config: Value) -> Result<Config> {
+    match read_config(path, cli_config) {
+        Ok(config) => Ok(config),
+        Err(err) => {
+            error!(target: LOG_TARGET_CONFIG, "Unable to load config {:?}: {}", path, err);
+            Err(err)
+        },
+    }
+}
+
+/// Deserialize configuration file from path.
+fn read_config(path: &PathBuf, cli_config: Value) -> Result<Config> {
+    let mut config_paths = Vec::new();
+    let mut config_value = parse_config(&path, &mut config_paths, IMPORT_RECURSION_LIMIT)?;
+
+    // Override config with CLI options.
+    config_value = serde_utils::merge(config_value, cli_config);
+
+    // Deserialize to concrete type.
+    let mut config = Config::deserialize(config_value)?;
+    config.ui_config.config_paths = config_paths;
+
+    print_deprecation_warnings(&config);
+
+    Ok(config)
+}
+
+/// Deserialize all configuration files as generic Value.
+fn parse_config(
+    path: &PathBuf,
+    config_paths: &mut Vec<PathBuf>,
+    recursion_limit: usize,
+) -> Result<Value> {
+    config_paths.push(path.to_owned());
+
+    let mut contents = fs::read_to_string(path)?;
+
+    // Remove UTF-8 BOM.
+    if contents.starts_with('\u{FEFF}') {
+        contents = contents.split_off(3);
+    }
+
+    // Load configuration file as Value.
+    let config: Value = match serde_yaml::from_str(&contents) {
+        Ok(config) => config,
+        Err(error) => {
+            // Prevent parsing error with an empty string and commented out file.
+            if error.to_string() == "EOF while parsing a value" {
+                Value::Mapping(Mapping::new())
+            } else {
+                return Err(Error::Yaml(error));
+            }
+        },
+    };
+
+    // Merge config with imports.
+    let imports = load_imports(&config, config_paths, recursion_limit);
+    Ok(serde_utils::merge(imports, config))
+}
+
+/// Load all referenced configuration files.
+fn load_imports(config: &Value, config_paths: &mut Vec<PathBuf>, recursion_limit: usize) -> Value {
+    let imports = match config.get("import") {
+        Some(Value::Sequence(imports)) => imports,
+        Some(_) => {
+            error!(target: LOG_TARGET_CONFIG, "Invalid import type: expected a sequence");
+            return Value::Null;
+        },
+        None => return Value::Null,
+    };
+
+    // Limit recursion to prevent infinite loops.
+    if !imports.is_empty() && recursion_limit == 0 {
+        error!(target: LOG_TARGET_CONFIG, "Exceeded maximum configuration import depth");
+        return Value::Null;
+    }
+
+    let mut merged = Value::Null;
+
+    for import in imports {
+        let path = match import {
+            Value::String(path) => PathBuf::from(path),
+            _ => {
+                error!(
+                    target: LOG_TARGET_CONFIG,
+                    "Invalid import element type: expected path string"
+                );
+                continue;
+            },
+        };
+
+        match parse_config(&path, config_paths, recursion_limit - 1) {
+            Ok(config) => merged = serde_utils::merge(merged, config),
+            Err(err) => {
+                error!(target: LOG_TARGET_CONFIG, "Unable to import config {:?}: {}", path, err)
+            },
+        }
+    }
+
+    merged
+}
+
 /// Get the location of the first found default config file paths
 /// according to the following order:
 ///
@@ -96,7 +241,7 @@ impl From<serde_yaml::Error> for Error {
 /// 3. $HOME/.config/alacritty/alacritty.yml
 /// 4. $HOME/.alacritty.yml
 #[cfg(not(windows))]
-pub fn installed_config() -> Option<PathBuf> {
+fn installed_config() -> Option<PathBuf> {
     // Try using XDG location by default.
     xdg::BaseDirectories::with_prefix("alacritty")
         .ok()
@@ -124,52 +269,8 @@ pub fn installed_config() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-pub fn installed_config() -> Option<PathBuf> {
+fn installed_config() -> Option<PathBuf> {
     dirs::config_dir().map(|path| path.join("alacritty\\alacritty.yml")).filter(|new| new.exists())
-}
-
-pub fn load_from(path: PathBuf) -> Config {
-    let mut config = reload_from(&path).unwrap_or_else(|_| Config::default());
-    config.config_path = Some(path);
-    config
-}
-
-pub fn reload_from(path: &PathBuf) -> Result<Config> {
-    match read_config(path) {
-        Ok(config) => Ok(config),
-        Err(err) => {
-            error!(target: LOG_TARGET_CONFIG, "Unable to load config {:?}: {}", path, err);
-            Err(err)
-        },
-    }
-}
-
-fn read_config(path: &PathBuf) -> Result<Config> {
-    let mut contents = fs::read_to_string(path)?;
-
-    // Remove UTF-8 BOM.
-    if contents.starts_with('\u{FEFF}') {
-        contents = contents.split_off(3);
-    }
-
-    parse_config(&contents)
-}
-
-fn parse_config(contents: &str) -> Result<Config> {
-    match serde_yaml::from_str(contents) {
-        Err(error) => {
-            // Prevent parsing error with an empty string and commented out file.
-            if error.to_string() == "EOF while parsing a value" {
-                Ok(Config::default())
-            } else {
-                Err(Error::Yaml(error))
-            }
-        },
-        Ok(config) => {
-            print_deprecation_warnings(&config);
-            Ok(config)
-        },
-    }
 }
 
 fn print_deprecation_warnings(config: &Config) {
@@ -215,13 +316,16 @@ fn print_deprecation_warnings(config: &Config) {
 
 #[cfg(test)]
 mod tests {
-    static DEFAULT_ALACRITTY_CONFIG: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../alacritty.yml"));
+    use super::*;
 
-    use super::Config;
+    static DEFAULT_ALACRITTY_CONFIG: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../alacritty.yml");
 
     #[test]
     fn config_read_eof() {
-        assert_eq!(super::parse_config(DEFAULT_ALACRITTY_CONFIG).unwrap(), Config::default());
+        let config_path: PathBuf = DEFAULT_ALACRITTY_CONFIG.into();
+        let mut config = read_config(&config_path, Value::Null).unwrap();
+        config.ui_config.config_paths = Vec::new();
+        assert_eq!(config, Config::default());
     }
 }
