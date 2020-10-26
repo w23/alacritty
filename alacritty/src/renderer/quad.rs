@@ -7,7 +7,6 @@ use crate::gl::types::*;
 use crate::renderer::Error;
 use alacritty_terminal::term::SizeInfo;
 
-#[cfg(feature = "live-shader-reload")]
 use log::*;
 
 use std::mem::size_of;
@@ -47,27 +46,32 @@ impl QuadGlyphRenderer {
     }
 
     pub fn insert_into_atlas(&mut self, rasterized: &RasterizedGlyph) -> QuadAtlasGlyph {
-        for group in &mut self.atlas_groups {
-            match group.atlas.insert(rasterized) {
-                Ok(glyph) => {
-                    return glyph;
-                },
-                Err(AtlasInsertError::GlyphTooLarge) => {
-                    panic!("FIXME handle this by returning dummy 0 glyph");
-                },
-                Err(AtlasInsertError::Full) => {},
+        loop {
+            for group in &mut self.atlas_groups {
+                match group.atlas.insert(rasterized) {
+                    Ok(glyph) => {
+                        return glyph;
+                    }
+                    Err(AtlasInsertError::GlyphTooLarge) => {
+                        error!("Glyph for char {:x} is too large", rasterized.rasterized.c as u32);
+                        return QuadAtlasGlyph {
+                            atlas_index: 0,
+                            colored: false,
+                            uv_bot: 0.,
+                            uv_left: 0.,
+                            uv_width: 0.,
+                            uv_height: 0.,
+                            top: 0,
+                            left: 0,
+                            width: 0,
+                            height: 0,
+                        };
+                    }
+                    Err(AtlasInsertError::Full) => {}
+                }
             }
-        }
 
-        self.atlas_groups.push(AtlasGroup::new(self.atlas_groups.len()));
-        match self.atlas_groups.last_mut().unwrap().atlas.insert(rasterized) {
-            Ok(glyph) => glyph,
-            Err(AtlasInsertError::GlyphTooLarge) => {
-                panic!("FIXME handle this by returning dummy 0 glyph");
-            },
-            Err(AtlasInsertError::Full) => {
-                panic!("New atlas is already full?!");
-            },
+            self.atlas_groups.push(AtlasGroup::new(self.atlas_groups.len()));
         }
     }
 
