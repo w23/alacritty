@@ -20,31 +20,45 @@ pub struct CursorRef {
 
 #[derive(Debug)]
 pub struct GridGlyphRenderer {
-    // Screen size
+    /// Screen size in cells.
     columns: usize,
     lines: usize,
 
-    // Grid cell metrics
+    /// Grid cell metrics in pixels.
     cell_size: Vec2<i32>,
     cell_offset: Vec2<i32>,
 
-    // Storage for texture data
+    /// Foreground colors array for each cell.
     screen_colors_fg: Vec<[u8; 3]>,
+
+    /// Background colors array for each cell.
     screen_colors_bg: Vec<[u8; 4]>,
+
+    /// Background alpha for empty cells.
     bg_alpha: u8,
 
-    // Texture that stores glyph->atlas references for the entire screen
+    /// Texture that stores glyphs data references for each cell of the screen.
     screen_glyphs_ref_tex: GLuint,
+
+    /// Texture that stores foreground color for each cell.
     screen_colors_fg_tex: GLuint,
+
+    /// Texture that stores background color for each cell.
     screen_colors_bg_tex: GLuint,
 
+    /// Shader program that paints the entire screen.
     program: ScreenShaderProgram,
+
+    /// Vertex array and buffer objects.
     vao: GLuint,
     vbo: GLuint,
 
+    /// Current cursor data, if any.
     cursor: Option<CursorRef>,
 
-    grids: Vec<Grid>,
+    /// Rendering passes. Potentially need multiple because not all glyphs may fit into a single
+    /// atlas texture.
+    grid_passes: Vec<GridPass>,
 }
 
 impl GridGlyphRenderer {
@@ -57,14 +71,10 @@ impl GridGlyphRenderer {
         let mut vbo: GLuint = 0;
 
         unsafe {
-            // gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
-
-            gl::DepthMask(gl::FALSE);
-
             gl::GenVertexArrays(1, &mut vao);
             gl::BindVertexArray(vao);
 
+            // Upload just a single full-screen quad.
             let vertices: [f32; 8] = [-1., 1., -1., -1., 1., 1., 1., -1.];
             gl::GenBuffers(1, &mut vbo);
             gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
@@ -101,22 +111,12 @@ impl GridGlyphRenderer {
 
             cursor: None,
 
-            grids: Vec::new(),
+            grid_passes: Vec::new(),
         })
     }
 
-    // Also clears
+    /// Resize buffers for a new screen resolution.
     pub fn resize(&mut self, size: &SizeInfo) {
-        unsafe {
-            // FIXME needed?
-            gl::Viewport(
-                size.padding_x as i32,
-                size.padding_y as i32,
-                size.width as i32 - 2 * size.padding_x as i32,
-                size.height as i32 - 2 * size.padding_y as i32,
-            );
-        }
-
         self.columns = size.cols().0;
         self.lines = size.lines().0;
         let cells = self.columns * self.lines;
@@ -124,14 +124,15 @@ impl GridGlyphRenderer {
         self.screen_colors_bg.resize(cells, [0u8; 4]);
         self.screen_colors_fg.resize(cells, [0u8; 3]);
 
-        for grid in &mut self.grids {
-            grid.resize(self.columns, self.lines);
+        for pass in &mut self.grid_passes {
+            pass.resize(self.columns, self.lines);
         }
     }
 
+    /// Clear internal buffers to prepare for the next frame.
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
-        for grid in &mut self.grids {
-            grid.clear();
+        for pass in &mut self.grid_passes {
+            pass.clear();
         }
 
         self.cursor = None;
@@ -139,20 +140,17 @@ impl GridGlyphRenderer {
         self.bg_alpha = bg_alpha;
         self.screen_colors_bg.iter_mut().for_each(|x| *x = [color.r, color.g, color.b, bg_alpha]);
         self.screen_colors_fg.iter_mut().for_each(|x| *x = [0u8; 3]);
-
-        unsafe {
-            gl::ClearColor(0.0, 0.0, 0.0, 0.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT);
-        }
     }
 
+    /// Completely obliterate atlas data in case e.g. font changed.
     pub fn clear_atlas(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
         self.cell_size = cell_size;
         self.cell_offset = cell_offset;
 
-        self.grids.clear();
+        self.grid_passes.clear();
     }
 
+    /// Update cursor coordinates and appearance.
     pub fn set_cursor(
         &mut self,
         atlas_index: usize,
@@ -168,47 +166,48 @@ impl GridGlyphRenderer {
             glyph: [glyph_x, glyph_y],
             color: [color.r as f32 / 255., color.g as f32 / 255., color.b as f32 / 255.],
         });
-        self.grids[atlas_index].dirty = true;
+        self.grid_passes[atlas_index].dirty = true;
     }
 
-    fn add_new_pass(&mut self) {
-        let index = self.grids.len();
-        self.grids.push(Grid::new(
-            index,
-            self.columns,
-            self.lines,
-            self.cell_size,
-            self.cell_offset,
-        ));
-    }
-
+    /// Try to load a new rasterized glyph into grid atlas.
+    /// Returns None if glyph cannot be rendered with grid method.
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Option<GridAtlasGlyph> {
         if rasterized.wide || rasterized.zero_width {
             return None;
         }
-        if self.grids.is_empty() {
-            self.add_new_pass();
-        }
+
         loop {
-            match self.grids.last_mut().unwrap().atlas.insert(rasterized) {
-                Ok(glyph) => {
-                    return Some(glyph);
-                },
-                Err(AtlasInsertError::GlyphTooLarge) => {
-                    trace!(
-                        "Glyph is too large for grid atlas, will render it using quads: {:?}",
-                        rasterized
-                    );
-                    return None;
-                },
-                Err(AtlasInsertError::Full) => {
-                    debug!("GridAtlas is full, creating a new one");
-                    self.add_new_pass();
-                },
+            if !self.grid_passes.is_empty() {
+                match self.grid_passes.last_mut().unwrap().atlas.insert(rasterized) {
+                    Ok(glyph) => {
+                        return Some(glyph);
+                    },
+                    Err(AtlasInsertError::GlyphTooLarge) => {
+                        trace!(
+                            "Glyph '{}' is too large for grid atlas, will render it using quads",
+                            rasterized.rasterized.c
+                        );
+                        return None;
+                    },
+                    Err(AtlasInsertError::Full) => {
+                        debug!("GridAtlas is full, creating a new one");
+                    },
+                }
             }
+
+            let index = self.grid_passes.len();
+            self.grid_passes.push(GridPass::new(
+                index,
+                self.columns,
+                self.lines,
+                self.cell_size,
+                self.cell_offset,
+            ));
         }
     }
 
+    /// Update cell colors separately from updating glyph. This is needed because glyph itself might
+    /// be rendered using quads, but we still need to render background color using main grid pass.
     pub fn update_cell_colors(&mut self, cell: &RenderableCell, wide: bool) {
         let cell_index = cell.line.0 * self.columns + cell.column.0;
 
@@ -222,24 +221,27 @@ impl GridGlyphRenderer {
         self.screen_colors_fg[cell_index] = [cell.fg.r, cell.fg.g, cell.fg.b];
         self.screen_colors_bg[cell_index] = [cell.bg.r, cell.bg.g, cell.bg.b, bg_alpha];
 
+        // Wide chars need to update adjacent cell background color too.
         if wide && cell.column.0 < self.columns {
             self.screen_colors_bg[cell_index + 1] = [cell.bg.r, cell.bg.g, cell.bg.b, bg_alpha];
         }
     }
 
+    /// Update cell glyph.
     pub fn update_cell(&mut self, cell: &RenderableCell, glyph: &GridAtlasGlyph) {
         let cell_index = cell.line.0 * self.columns + cell.column.0;
+
         // put glyph reference into texture data
-        self.grids[glyph.atlas_index].glyphs[cell_index] = GlyphRef {
+        self.grid_passes[glyph.atlas_index].glyphs[cell_index] = GlyphRef {
             atlas_x: glyph.column as u8,
             atlas_y: glyph.line as u8,
             flags: GLYPH_REF_FLAG_NOT_EMPTY_BIT
                 | if glyph.colored { GLYPH_REF_FLAG_COLORED_BIT } else { 0 },
         };
-        self.grids[glyph.atlas_index].dirty = true;
+        self.grid_passes[glyph.atlas_index].dirty = true;
     }
 
-    fn set_cursor_uniform(&self, pass: usize) {
+    fn apply_cursor_uniform(&self, pass: usize) {
         match &self.cursor {
             Some(cursor) if cursor.atlas_index == pass => unsafe {
                 gl::Uniform4f(
@@ -263,6 +265,7 @@ impl GridGlyphRenderer {
         }
     }
 
+    /// Render all grid passes
     pub fn draw(&mut self, size_info: &SizeInfo) {
         #[cfg(feature = "live-shader-reload")]
         {
@@ -315,27 +318,26 @@ impl GridGlyphRenderer {
             gl::EnableVertexAttribArray(0);
         }
 
-        for (pass_num, grid) in (&self.grids).iter().enumerate() {
+        for (pass_num, pass) in (&self.grid_passes).iter().enumerate() {
             let main_pass = pass_num == 0;
-            if !main_pass && !grid.dirty {
+            if !main_pass && !pass.dirty {
                 continue;
             }
-            let atlas_dims = grid.atlas.cell_dims();
+            let atlas_dims = pass.atlas.cell_dims();
             unsafe {
                 gl::Uniform4f(
                     self.program.u_atlas_dim,
                     atlas_dims.offset.x as f32,
-                    // atlas_dims.offset.y as f32,
                     // Offset needs to be relative to "top" inverted-y OpenGL texture coords
                     (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
                     atlas_dims.size.x as f32,
                     atlas_dims.size.y as f32,
                 );
                 gl::Uniform1i(self.program.u_main_pass, main_pass as i32);
-                self.set_cursor_uniform(pass_num);
+                self.apply_cursor_uniform(pass_num);
 
                 gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, grid.atlas.tex);
+                gl::BindTexture(gl::TEXTURE_2D, pass.atlas.tex);
 
                 gl::ActiveTexture(gl::TEXTURE1);
                 gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
@@ -343,7 +345,7 @@ impl GridGlyphRenderer {
                     self.columns as i32,
                     self.lines as i32,
                     PixelFormat::RGB8,
-                    grid.glyphs.as_ptr() as *const _,
+                    pass.glyphs.as_ptr() as *const _,
                 );
                 gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
             }
@@ -352,7 +354,6 @@ impl GridGlyphRenderer {
                 unsafe {
                     // All further passes need to blend with framebuffer color
                     gl::Enable(gl::BLEND);
-                    // gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_COLOR, gl::ONE, gl::ONE);
                     gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE);
                 }
             }
@@ -382,16 +383,18 @@ struct GlyphRef {
 const EMPTY_GLYPH_REF: GlyphRef = GlyphRef { atlas_x: 0, atlas_y: 0, flags: 0 };
 
 #[derive(Debug)]
-struct Grid {
+struct GridPass {
+    /// Atlas textures
     atlas: GridAtlas,
 
     /// Screen worth of glyphs
     glyphs: Vec<GlyphRef>,
 
+    /// Whether this pass contains any data to render
     dirty: bool,
 }
 
-impl Grid {
+impl GridPass {
     fn new(
         index: usize,
         columns: usize,

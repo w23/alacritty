@@ -51,7 +51,7 @@ impl QuadGlyphRenderer {
                 match group.atlas.insert(rasterized) {
                     Ok(glyph) => {
                         return glyph;
-                    }
+                    },
                     Err(AtlasInsertError::GlyphTooLarge) => {
                         error!("Glyph for char {:x} is too large", rasterized.rasterized.c as u32);
                         return QuadAtlasGlyph {
@@ -66,8 +66,8 @@ impl QuadGlyphRenderer {
                             width: 0,
                             height: 0,
                         };
-                    }
-                    Err(AtlasInsertError::Full) => {}
+                    },
+                    Err(AtlasInsertError::Full) => {},
                 }
             }
 

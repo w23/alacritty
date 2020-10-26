@@ -75,6 +75,11 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new() -> Result<Self, Error> {
+        unsafe {
+            // Depth is irrelevant
+            gl::DepthMask(gl::FALSE);
+        }
+
         Ok(Self {
             grids: GridGlyphRenderer::new()?,
             quad_glyphs: QuadGlyphRenderer::new(),
@@ -104,6 +109,15 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, size: &term::SizeInfo) {
+        unsafe {
+            gl::Viewport(
+                size.padding_x as i32,
+                size.padding_y as i32,
+                size.width as i32 - 2 * size.padding_x as i32,
+                size.height as i32 - 2 * size.padding_y as i32,
+            );
+        }
+
         self.grids.resize(size);
     }
 
@@ -235,7 +249,6 @@ impl<'a> RenderContext<'a> {
                 }
             },
 
-            // こんにちは
             RenderableCellContent::Chars(chars) => {
                 // Get font key for cell.
                 let font_key = match cell.flags & Flags::BOLD_ITALIC {
@@ -318,7 +331,6 @@ impl<'a> RenderContext<'a> {
                             // right side of the preceding character. Since we render the
                             // zero-width characters inside the preceding character, the
                             // anchor has been moved to the right by one cell.
-                            // FIXME WHY????
                             1
                         } else {
                             0

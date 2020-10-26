@@ -340,7 +340,6 @@ impl Display {
         // Need font metrics to resize the window properly. This suggests to me the
         // font metrics should be computed before creating the window in the first
         // place so that a resize is not needed.
-        // FIXME get from glyph_cache
         let (cw, ch) = GlyphCache::compute_cell_size(config, &glyph_cache.font_metrics());
 
         Ok((glyph_cache, cw, ch))
