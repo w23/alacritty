@@ -103,7 +103,7 @@ impl QuadGlyphRenderer {
             gl::Viewport(pad_x, pad_y, width, height);
 
             // Swap program.
-            gl::UseProgram(self.program.program.id);
+            gl::UseProgram(self.program.get_id());
 
             gl::Uniform1i(self.program.u_atlas, 0);
             gl::Uniform2f(self.program.u_scale, 2.0 / width as f32, -2.0 / height as f32);

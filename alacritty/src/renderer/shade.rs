@@ -1,8 +1,6 @@
 use crate::gl;
 use crate::gl::types::*;
-use alacritty_terminal::term;
-// use alacritty_terminal::term::color::Rgb;
-// use log::*;
+use alacritty_terminal::term::SizeInfo;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -79,48 +77,6 @@ fn create_shader_from_source(kind: GLenum, source: &str) -> Result<GLuint, Shade
         }
 
         Err(ShaderCreationError::Compile(PathBuf::new(), log))
-    }
-}
-
-fn create_shader(
-    path: &str,
-    kind: GLenum,
-    source: Option<&'static str>,
-) -> Result<GLuint, ShaderCreationError> {
-    let from_disk;
-    let source = if let Some(src) = source {
-        src
-    } else {
-        from_disk = fs::read_to_string(path)?;
-        &from_disk[..]
-    };
-
-    let len: [GLint; 1] = [source.len() as GLint];
-
-    let shader = unsafe {
-        let shader = gl::CreateShader(kind);
-        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
-        gl::CompileShader(shader);
-        shader
-    };
-
-    let mut success: GLint = 0;
-    unsafe {
-        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
-    }
-
-    if success == GLint::from(gl::TRUE) {
-        Ok(shader)
-    } else {
-        // Read log.
-        let log = get_shader_info_log(shader);
-
-        // Cleanup.
-        unsafe {
-            gl::DeleteShader(shader);
-        }
-
-        Err(ShaderCreationError::Compile(PathBuf::from(path), log))
     }
 }
 
@@ -209,11 +165,6 @@ impl Shader {
         Self { kind, id: 0, file: filewatch::File::new(std::path::Path::new(file_path)) }
     }
 
-    // #[cfg(not(feature = "live-shader-reload"))]
-    // fn from_source(kind: GLuint, src: &str) -> Result<Self, ShaderCreationError> {
-    //     Ok(Self { kind, id: create_shader_from_source(kind, src)? })
-    // }
-
     #[cfg(feature = "live-shader-reload")]
     fn valid(&self) -> bool {
         self.id != 0
@@ -249,8 +200,8 @@ impl Drop for Shader {
 
 #[derive(Debug)]
 pub struct ShaderProgram {
-    /// Program id
-    pub id: GLuint,
+    /// OpenGL program id
+    id: GLuint,
 
     #[cfg(feature = "live-shader-reload")]
     vertex_shader: Shader,
@@ -287,11 +238,6 @@ impl ShaderProgram {
     }
 
     #[cfg(feature = "live-shader-reload")]
-    fn valid(&self) -> bool {
-        self.id != 0
-    }
-
-    #[cfg(feature = "live-shader-reload")]
     fn poll(&mut self) -> Result<bool, ShaderCreationError> {
         Ok(
             if (self.vertex_shader.poll()? || self.fragment_shader.poll()?)
@@ -322,8 +268,6 @@ impl Drop for ShaderProgram {
     }
 }
 
-// static TEXT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.f.glsl");
-// static TEXT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/text.v.glsl");
 static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
 static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
 #[cfg(feature = "live-shader-reload")]
@@ -335,9 +279,7 @@ static GLYPHRECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res
 #[cfg(feature = "live-shader-reload")]
 static GLYPHRECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.f.glsl");
 
-// Shader source which is used when live-shader-reload feature is disable.
-// static TEXT_SHADER_F: &str = include_str!("../../res/text.f.glsl");
-// static TEXT_SHADER_V: &str = include_str!("../../res/text.v.glsl");
+// Shader source which is used when live-shader-reload feature is disabled.
 static RECT_SHADER_V: &str = include_str!("../../res/rect.v.glsl");
 static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
 #[cfg(not(feature = "live-shader-reload"))]
@@ -355,7 +297,7 @@ macro_rules! declare_program {
 	($struct:ident, $vpath:ident, $vsrc:ident, $fpath:ident, $fsrc:ident {$( $uniform:ident ),*}) => {
 	  #[derive(Debug)]
 		pub struct $struct {
-			pub program: ShaderProgram,
+			program: ShaderProgram,
 			$(
 				pub $uniform: GLint,
 			)*
@@ -384,6 +326,10 @@ macro_rules! declare_program {
 				Ok(this)
 			}
 
+			pub fn get_id(&self) -> GLuint {
+				self.program.id
+			}
+
 			fn update(&mut self, validate_uniforms: bool) {
 				$(
 					 self.$uniform = unsafe { gl::GetUniformLocation(self.program.id, cptr!(concat!(stringify!($uniform), "\0"))) };
@@ -406,7 +352,7 @@ macro_rules! declare_program {
 	}
 }
 
-declare_program! { ScreenShaderProgram,
+declare_program! { GridShaderProgram,
     SCREEN_SHADER_V_PATH, SCREEN_SHADER_V, SCREEN_SHADER_F_PATH, SCREEN_SHADER_F {
         u_screen_dim,
         u_cell_dim,
@@ -421,8 +367,8 @@ declare_program! { ScreenShaderProgram,
     }
 }
 
-impl ScreenShaderProgram {
-    pub fn set_term_uniforms(&self, props: &term::SizeInfo) {
+impl GridShaderProgram {
+    pub fn set_term_uniforms(&self, props: &SizeInfo) {
         unsafe {
             gl::Uniform4f(
                 self.u_screen_dim,
@@ -433,6 +379,55 @@ impl ScreenShaderProgram {
             );
             gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
         }
+    }
+}
+
+declare_program! { GlyphRectShaderProgram,
+                GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F_PATH, GLYPHRECT_SHADER_F {
+                u_atlas,
+                u_scale
+        }
+}
+
+fn create_shader(
+    path: &str,
+    kind: GLenum,
+    source: Option<&'static str>,
+) -> Result<GLuint, ShaderCreationError> {
+    let from_disk;
+    let source = if let Some(src) = source {
+        src
+    } else {
+        from_disk = fs::read_to_string(path)?;
+        &from_disk[..]
+    };
+
+    let len: [GLint; 1] = [source.len() as GLint];
+
+    let shader = unsafe {
+        let shader = gl::CreateShader(kind);
+        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
+        gl::CompileShader(shader);
+        shader
+    };
+
+    let mut success: GLint = 0;
+    unsafe {
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
+    }
+
+    if success == GLint::from(gl::TRUE) {
+        Ok(shader)
+    } else {
+        // Read log.
+        let log = get_shader_info_log(shader);
+
+        // Cleanup.
+        unsafe {
+            gl::DeleteShader(shader);
+        }
+
+        Err(ShaderCreationError::Compile(PathBuf::from(path), log))
     }
 }
 
@@ -473,18 +468,6 @@ impl RectShaderProgram {
 
         Ok(shader)
     }
-
-    // pub fn set_color(&self, color: Rgb, alpha: f32) {
-    //     unsafe {
-    //         gl::Uniform4f(
-    //             self.u_color,
-    //             f32::from(color.r) / 255.,
-    //             f32::from(color.g) / 255.,
-    //             f32::from(color.b) / 255.,
-    //             alpha,
-    //         );
-    //     }
-    // }
 }
 
 impl Drop for RectShaderProgram {
@@ -492,53 +475,5 @@ impl Drop for RectShaderProgram {
         unsafe {
             gl::DeleteProgram(self.id);
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct GlyphRectShaderProgram {
-    pub program: ShaderProgram,
-    pub u_atlas: GLint,
-    pub u_scale: GLint,
-}
-
-impl GlyphRectShaderProgram {
-    #[cfg(feature = "live-shader-reload")]
-    pub fn new() -> Result<Self, ShaderCreationError> {
-        Ok(Self {
-            program: ShaderProgram::from_files(GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_F_PATH)?,
-            u_atlas: -1,
-            u_scale: -1,
-        })
-    }
-
-    #[cfg(not(feature = "live-shader-reload"))]
-    pub fn new() -> Result<Self, ShaderCreationError> {
-        let mut this = Self {
-            program: ShaderProgram::from_sources(GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F)?,
-            u_atlas: -1,
-            u_scale: -1,
-        };
-
-        this.update(true);
-        Ok(this)
-    }
-
-    fn update(&mut self, _validate_uniforms: bool) {
-        let atlas = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"atlas\0")) };
-        self.u_atlas = atlas;
-
-        let scale = unsafe { gl::GetUniformLocation(self.program.id, cptr!(b"uScale\0")) };
-        self.u_scale = scale;
-    }
-
-    #[cfg(feature = "live-shader-reload")]
-    pub fn poll(&mut self) -> Result<bool, ShaderCreationError> {
-        if self.program.poll()? {
-            self.update(false);
-            return Ok(true);
-        }
-
-        Ok(false)
     }
 }

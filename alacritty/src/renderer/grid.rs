@@ -1,7 +1,7 @@
 use super::atlas::{AtlasInsertError, GridAtlas};
 use super::glyph::{GridAtlasGlyph, RasterizedGlyph};
 use super::math::*;
-use super::shade::ScreenShaderProgram;
+use super::shade::GridShaderProgram;
 use super::texture::{create_texture, upload_texture, PixelFormat};
 use crate::gl;
 use crate::gl::types::*;
@@ -47,7 +47,7 @@ pub struct GridGlyphRenderer {
     screen_colors_bg_tex: GLuint,
 
     /// Shader program that paints the entire screen.
-    program: ScreenShaderProgram,
+    program: GridShaderProgram,
 
     /// Vertex array and buffer objects.
     vao: GLuint,
@@ -105,7 +105,7 @@ impl GridGlyphRenderer {
             screen_glyphs_ref_tex,
             screen_colors_fg_tex,
             screen_colors_bg_tex,
-            program: ScreenShaderProgram::new()?,
+            program: GridShaderProgram::new()?,
             vao,
             vbo,
 
@@ -286,7 +286,7 @@ impl GridGlyphRenderer {
             // so GL blending needs to be disabled
             gl::Disable(gl::BLEND);
 
-            gl::UseProgram(self.program.program.id);
+            gl::UseProgram(self.program.get_id());
 
             self.program.set_term_uniforms(size_info);
             gl::Uniform1i(self.program.u_atlas, 0);
