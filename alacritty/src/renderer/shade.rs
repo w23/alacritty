@@ -4,7 +4,6 @@ use alacritty_terminal::term::SizeInfo;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -268,31 +267,6 @@ impl Drop for ShaderProgram {
     }
 }
 
-static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
-static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
-#[cfg(feature = "live-shader-reload")]
-static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
-#[cfg(feature = "live-shader-reload")]
-static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
-#[cfg(feature = "live-shader-reload")]
-static GLYPHRECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.v.glsl");
-#[cfg(feature = "live-shader-reload")]
-static GLYPHRECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.f.glsl");
-
-// Shader source which is used when live-shader-reload feature is disabled.
-static RECT_SHADER_V: &str = include_str!("../../res/rect.v.glsl");
-static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
-#[cfg(not(feature = "live-shader-reload"))]
-static GLYPHRECT_SHADER_V: &str = include_str!("../../res/glyphrect.v.glsl");
-#[cfg(not(feature = "live-shader-reload"))]
-static GLYPHRECT_SHADER_F: &str = include_str!("../../res/glyphrect.f.glsl");
-#[cfg(not(feature = "live-shader-reload"))]
-static SCREEN_SHADER_V: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl"));
-#[cfg(not(feature = "live-shader-reload"))]
-static SCREEN_SHADER_F: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
-
 macro_rules! declare_program {
 	($struct:ident, $vpath:ident, $vsrc:ident, $fpath:ident, $fsrc:ident {$( $uniform:ident ),*}) => {
 	  #[derive(Debug)]
@@ -352,6 +326,17 @@ macro_rules! declare_program {
 	}
 }
 
+#[cfg(feature = "live-shader-reload")]
+static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
+#[cfg(feature = "live-shader-reload")]
+static SCREEN_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static SCREEN_SHADER_V: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl"));
+#[cfg(not(feature = "live-shader-reload"))]
+static SCREEN_SHADER_F: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.f.glsl"));
+
 declare_program! { GridShaderProgram,
     SCREEN_SHADER_V_PATH, SCREEN_SHADER_V, SCREEN_SHADER_F_PATH, SCREEN_SHADER_F {
         u_screen_dim,
@@ -382,6 +367,15 @@ impl GridShaderProgram {
     }
 }
 
+#[cfg(feature = "live-shader-reload")]
+static GLYPHRECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.v.glsl");
+#[cfg(feature = "live-shader-reload")]
+static GLYPHRECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.f.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static GLYPHRECT_SHADER_V: &str = include_str!("../../res/glyphrect.v.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static GLYPHRECT_SHADER_F: &str = include_str!("../../res/glyphrect.f.glsl");
+
 declare_program! { GlyphRectShaderProgram,
                 GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F_PATH, GLYPHRECT_SHADER_F {
                 u_atlas,
@@ -389,91 +383,15 @@ declare_program! { GlyphRectShaderProgram,
         }
 }
 
-fn create_shader(
-    path: &str,
-    kind: GLenum,
-    source: Option<&'static str>,
-) -> Result<GLuint, ShaderCreationError> {
-    let from_disk;
-    let source = if let Some(src) = source {
-        src
-    } else {
-        from_disk = fs::read_to_string(path)?;
-        &from_disk[..]
-    };
+#[cfg(feature = "live-shader-reload")]
+static RECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.v.glsl");
+#[cfg(feature = "live-shader-reload")]
+static RECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/rect.f.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static RECT_SHADER_V: &str = include_str!("../../res/rect.v.glsl");
+#[cfg(not(feature = "live-shader-reload"))]
+static RECT_SHADER_F: &str = include_str!("../../res/rect.f.glsl");
 
-    let len: [GLint; 1] = [source.len() as GLint];
-
-    let shader = unsafe {
-        let shader = gl::CreateShader(kind);
-        gl::ShaderSource(shader, 1, &(source.as_ptr() as *const _), len.as_ptr());
-        gl::CompileShader(shader);
-        shader
-    };
-
-    let mut success: GLint = 0;
-    unsafe {
-        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
-    }
-
-    if success == GLint::from(gl::TRUE) {
-        Ok(shader)
-    } else {
-        // Read log.
-        let log = get_shader_info_log(shader);
-
-        // Cleanup.
-        unsafe {
-            gl::DeleteShader(shader);
-        }
-
-        Err(ShaderCreationError::Compile(PathBuf::from(path), log))
-    }
-}
-
-/// Rectangle drawing program.
-///
-/// Uniforms are prefixed with "u".
-#[derive(Debug)]
-pub struct RectShaderProgram {
-    /// Program id.
-    pub id: GLuint,
-    /// Rectangle color.
-    u_color: GLint,
-}
-
-impl RectShaderProgram {
-    pub fn new() -> Result<Self, ShaderCreationError> {
-        let (vertex_src, fragment_src) = if cfg!(feature = "live-shader-reload") {
-            (None, None)
-        } else {
-            (Some(RECT_SHADER_V), Some(RECT_SHADER_F))
-        };
-        let vertex_shader = create_shader(RECT_SHADER_V_PATH, gl::VERTEX_SHADER, vertex_src)?;
-        let fragment_shader = create_shader(RECT_SHADER_F_PATH, gl::FRAGMENT_SHADER, fragment_src)?;
-        let program = create_program(vertex_shader, fragment_shader)?;
-
-        unsafe {
-            gl::DeleteShader(fragment_shader);
-            gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
-        }
-
-        // Get uniform locations.
-        let u_color = unsafe { gl::GetUniformLocation(program, b"color\0".as_ptr() as *const _) };
-
-        let shader = Self { id: program, u_color };
-
-        unsafe { gl::UseProgram(0) }
-
-        Ok(shader)
-    }
-}
-
-impl Drop for RectShaderProgram {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.id);
-        }
-    }
+declare_program! { RectShaderProgram, RECT_SHADER_V_PATH, RECT_SHADER_V, RECT_SHADER_F_PATH, RECT_SHADER_F {
+u_color }
 }

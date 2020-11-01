@@ -5,6 +5,9 @@ use crate::gl::types::*;
 use crate::renderer::Error;
 use alacritty_terminal::term::SizeInfo;
 
+#[cfg(feature = "live-shader-reload")]
+use log::*;
+
 use std::mem::size_of;
 use std::ptr;
 
@@ -76,7 +79,7 @@ impl SolidRectRenderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
 
-            gl::UseProgram(self.program.id);
+            gl::UseProgram(self.program.get_id());
 
             // Position.
             gl::VertexAttribPointer(
@@ -188,6 +191,19 @@ impl SolidRectRenderer {
     fn draw_accumulated(&mut self) {
         if self.indices.is_empty() {
             return;
+        }
+
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                },
+                Ok(updated) if updated => {
+                    debug!("updated shader: {:?}", self.program);
+                },
+                _ => {},
+            }
         }
 
         // Upload accumulated buffers
