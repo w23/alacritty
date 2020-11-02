@@ -357,16 +357,16 @@ declare_program! { GridShaderProgram,
 }
 
 impl GridShaderProgram {
-    pub fn set_term_uniforms(&self, props: &SizeInfo) {
+    pub fn set_term_uniforms(&self, size_info: &SizeInfo) {
         unsafe {
             gl::Uniform4f(
                 self.u_screen_dim,
-                props.padding_x,
-                props.padding_y,
-                props.width,
-                props.height,
+                size_info.padding_x(),
+                size_info.padding_y(),
+                size_info.width(),
+                size_info.height(),
             );
-            gl::Uniform2f(self.u_cell_dim, props.cell_width, props.cell_height);
+            gl::Uniform2f(self.u_cell_dim, size_info.cell_width(), size_info.cell_height());
         }
     }
 }

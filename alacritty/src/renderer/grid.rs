@@ -115,9 +115,9 @@ impl GridGlyphRenderer {
     }
 
     /// Resize buffers for a new screen resolution.
-    pub fn resize(&mut self, size: &SizeInfo) {
-        self.columns = size.cols().0;
-        self.lines = size.lines().0;
+    pub fn resize(&mut self, size_info: &SizeInfo) {
+        self.columns = size_info.cols().0;
+        self.lines = size_info.screen_lines().0;
         let cells = self.columns * self.lines;
 
         self.screen_colors_bg.resize(cells, [0u8; 4]);
@@ -325,7 +325,7 @@ impl GridGlyphRenderer {
                     self.program.u_atlas_dim,
                     atlas_dims.offset.x as f32,
                     // Offset needs to be relative to "top" inverted-y OpenGL texture coords
-                    (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height,
+                    (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height(),
                     atlas_dims.size.x as f32,
                     atlas_dims.size.y as f32,
                 );

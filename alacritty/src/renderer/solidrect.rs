@@ -114,7 +114,7 @@ impl SolidRectRenderer {
         // Prepare common state
         unsafe {
             // Remove padding from viewport.
-            gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
+            gl::Viewport(0, 0, size_info.width() as i32, size_info.height() as i32);
 
             gl::Enable(gl::BLEND);
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
@@ -126,8 +126,8 @@ impl SolidRectRenderer {
             gl::UseProgram(self.program.get_id());
         }
 
-        let center_x = size_info.width / 2.;
-        let center_y = size_info.height / 2.;
+        let center_x = size_info.width() / 2.;
+        let center_y = size_info.height() / 2.;
 
         for rect in &rects {
             if let Err(InsertError::Full) = self.append_rect(center_x, center_y, rect) {

@@ -498,7 +498,7 @@ impl Display {
             for (i, message_text) in text.iter().enumerate() {
                 render_context.render_string(
                     glyph_cache,
-										start_line + i,
+                    start_line + i,
                     &message_text,
                     fg,
                     Some(color),
@@ -659,7 +659,7 @@ impl Display {
 
         let fg = config.colors.search_bar_foreground();
         let bg = config.colors.search_bar_background();
-				render_context.render_string(glyph_cache, size_info.screen_lines(), &text, fg, Some(bg));
+        render_context.render_string(glyph_cache, size_info.screen_lines(), &text, fg, Some(bg));
     }
 
     /// Draw render timer.
@@ -678,7 +678,13 @@ impl Display {
         let fg = config.colors.primary.background;
         let bg = config.colors.normal().red;
 
-				render_context.render_string(glyph_cache, size_info.screen_lines() - 2, &timing[..], fg, Some(bg));
+        render_context.render_string(
+            glyph_cache,
+            size_info.screen_lines() - 2,
+            &timing[..],
+            fg,
+            Some(bg),
+        );
     }
 
     /// Requst a new frame for a window on Wayland.
