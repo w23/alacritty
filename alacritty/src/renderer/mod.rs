@@ -46,7 +46,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            },
+            }
         }
     }
 }
@@ -227,7 +227,7 @@ impl<'a> RenderContext<'a> {
                             glyph_grid.line as f32,
                             cell.fg,
                         );
-                    },
+                    }
 
                     AtlasGlyph::Quad(quad) => {
                         let glyph_quad = GlyphQuad {
@@ -240,9 +240,9 @@ impl<'a> RenderContext<'a> {
                         };
 
                         self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-                    },
+                    }
                 }
-            },
+            }
 
             RenderableCellContent::Chars(chars) => {
                 // Get font key for cell.
@@ -299,7 +299,7 @@ impl<'a> RenderContext<'a> {
                         true,
                     );
                 }
-            },
+            }
         };
     }
 
@@ -315,7 +315,7 @@ impl<'a> RenderContext<'a> {
         match glyph {
             AtlasGlyph::Grid(grid_glyph) => {
                 self.this.grids.update_cell(cell, grid_glyph);
-            },
+            }
             AtlasGlyph::Quad(quad_glyph) => {
                 let glyph_quad = GlyphQuad {
                     glyph: quad_glyph,
@@ -337,7 +337,7 @@ impl<'a> RenderContext<'a> {
                 };
 
                 self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-            },
+            }
         }
     }
 
