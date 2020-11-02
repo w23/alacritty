@@ -4,7 +4,7 @@
 use std::cmp::min;
 use std::f64;
 use std::fmt::{self, Formatter};
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -17,7 +17,7 @@ use glutin::window::CursorIcon;
 use log::{debug, info};
 use parking_lot::MutexGuard;
 use unicode_width::UnicodeWidthChar;
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use wayland_client::{Display as WaylandDisplay, EventQueue};
 
 #[cfg(target_os = "macos")]
@@ -25,11 +25,14 @@ use crossfont::set_font_smoothing;
 use crossfont::{self, Rasterize, Rasterizer};
 
 use alacritty_terminal::event::{EventListener, OnResize};
-use alacritty_terminal::index::{Column, Direction, Line, Point};
+use alacritty_terminal::index::{Column, Direction, Point};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::{RenderableCell, SizeInfo, Term, TermMode};
+use alacritty_terminal::term::{MIN_COLS, MIN_SCREEN_LINES};
 
 use crate::config::font::Font;
+use crate::config::window::Dimensions;
+#[cfg(not(windows))]
 use crate::config::window::StartupMode;
 use crate::config::Config;
 use crate::event::{Mouse, SearchState};
@@ -109,8 +112,8 @@ pub struct DisplayUpdate {
     pub dirty: bool,
 
     dimensions: Option<PhysicalSize<u32>>,
-    font: Option<Font>,
     cursor_dirty: bool,
+    font: Option<Font>,
 }
 
 impl DisplayUpdate {
@@ -151,14 +154,15 @@ pub struct Display {
     /// Currently highlighted URL.
     pub highlighted_url: Option<Url>,
 
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     pub wayland_event_queue: Option<EventQueue>,
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub is_x11: bool,
 
     renderer: Renderer,
     glyph_cache: GlyphCache,
     meter: Meter,
-    #[cfg(not(any(target_os = "macos", windows)))]
-    is_x11: bool,
 
     #[cfg(feature = "dump-raw-render-timings")]
     timing_dump_file: std::fs::File,
@@ -174,86 +178,70 @@ impl Display {
         let metrics = GlyphCache::static_metrics(config.ui_config.font.clone(), estimated_dpr)?;
         let (cell_width, cell_height) = GlyphCache::compute_cell_size(config, &metrics);
 
-        let dimensions = GlyphCache::calculate_dimensions(
-            &config.ui_config.window,
-            estimated_dpr,
-            cell_width,
-            cell_height,
-        );
+        // Guess the target window size if the user has specified the number of lines/columns.
+        let dimensions = config.ui_config.window.dimensions();
+        let estimated_size = dimensions.map(|dimensions| {
+            window_size(config, dimensions, cell_width, cell_height, estimated_dpr)
+        });
 
         debug!("Estimated DPR: {}", estimated_dpr);
-        debug!("Estimated Cell Size: {} x {}", cell_width, cell_height);
-        debug!("Estimated Dimensions: {:?}", dimensions);
+        debug!("Estimated window size: {:?}", estimated_size);
+        debug!("Estimated cell size: {} x {}", cell_width, cell_height);
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         let mut wayland_event_queue = None;
 
         // Initialize Wayland event queue, to handle Wayland callbacks.
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         if let Some(display) = event_loop.wayland_display() {
             let display = unsafe { WaylandDisplay::from_external_display(display as _) };
             wayland_event_queue = Some(display.create_event_queue());
         }
 
-        // Create the window where Alacritty will be displayed.
-        let size = dimensions.map(|(width, height)| PhysicalSize::new(width, height));
-
-        // Spawn window.
+        // Spawn the Alacritty window.
         let mut window = Window::new(
             event_loop,
             &config,
-            size,
-            #[cfg(not(any(target_os = "macos", windows)))]
+            estimated_size,
+            #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
             wayland_event_queue.as_ref(),
         )?;
 
-        let dpr = window.scale_factor();
-        info!("Device pixel ratio: {}", dpr);
-
-        // get window properties for initializing the other subsystems.
-        let viewport_size = window.inner_size();
+        info!("Device pixel ratio: {}", window.dpr);
 
         // Create renderer.
         let mut renderer = Renderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
-            Self::new_glyph_cache(dpr, &mut renderer, config)?;
+            Self::new_glyph_cache(window.dpr, &mut renderer, config)?;
 
-        let padding = config.ui_config.window.padding;
-        let mut padding_x = f32::from(padding.x) * dpr as f32;
-        let mut padding_y = f32::from(padding.y) * dpr as f32;
-
-        if let Some((width, height)) =
-            GlyphCache::calculate_dimensions(&config.ui_config.window, dpr, cell_width, cell_height)
-        {
-            let PhysicalSize { width: w, height: h } = window.inner_size();
-            if w == width && h == height {
+        if let Some(dimensions) = dimensions {
+            if (estimated_dpr - window.dpr).abs() < f64::EPSILON {
                 info!("Estimated DPR correctly, skipping resize");
             } else {
-                window.set_inner_size(PhysicalSize::new(width, height));
+                // Resize the window again if the DPR was not estimated correctly.
+                let size = window_size(config, dimensions, cell_width, cell_height, window.dpr);
+                window.set_inner_size(size);
             }
-        } else if config.ui_config.window.dynamic_padding {
-            // Make sure additional padding is spread evenly.
-            padding_x = dynamic_padding(padding_x, viewport_size.width as f32, cell_width);
-            padding_y = dynamic_padding(padding_y, viewport_size.height as f32, cell_height);
         }
 
-        padding_x = padding_x.floor();
-        padding_y = padding_y.floor();
-
-        info!("Cell Size: {} x {}", cell_width, cell_height);
-        info!("Padding: {} x {}", padding_x, padding_y);
+        let padding = config.ui_config.window.padding(window.dpr);
+        let viewport_size = window.inner_size();
 
         // Create new size with at least one column and row.
-        let size_info = SizeInfo {
-            dpr,
-            width: (viewport_size.width as f32).max(cell_width + 2. * padding_x),
-            height: (viewport_size.height as f32).max(cell_height + 2. * padding_y),
+        let size_info = SizeInfo::new(
+            viewport_size.width as f32,
+            viewport_size.height as f32,
             cell_width,
             cell_height,
-            padding_x,
-            padding_y,
-        };
+            padding.0,
+            padding.1,
+            config.ui_config.window.dynamic_padding && dimensions.is_none(),
+        );
+
+        info!("Cell size: {} x {}", cell_width, cell_height);
+        info!("Padding: {} x {}", size_info.padding_x(), size_info.padding_y());
+        info!("Width: {}, Height: {}", size_info.width(), size_info.height());
 
         // Update OpenGL projection.
         renderer.resize(&size_info);
@@ -266,8 +254,10 @@ impl Display {
         #[cfg(target_os = "macos")]
         set_font_smoothing(config.ui_config.font.use_thin_strokes());
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
         let is_x11 = event_loop.is_x11();
+        #[cfg(not(any(feature = "x11", target_os = "macos", windows)))]
+        let is_x11 = false;
 
         // On Wayland we can safely ignore this call, since the window isn't visible until you
         // actually draw something into it and commit those changes.
@@ -288,12 +278,12 @@ impl Display {
         }
 
         #[allow(clippy::single_match)]
+        #[cfg(not(windows))]
         match config.ui_config.window.startup_mode {
-            StartupMode::Fullscreen => window.set_fullscreen(true),
             #[cfg(target_os = "macos")]
             StartupMode::SimpleFullscreen => window.set_simple_fullscreen(true),
-            #[cfg(not(any(target_os = "macos", windows)))]
-            StartupMode::Maximized => window.set_maximized(true),
+            #[cfg(not(target_os = "macos"))]
+            StartupMode::Maximized if is_x11 => window.set_maximized(true),
             _ => (),
         }
 
@@ -307,7 +297,7 @@ impl Display {
             highlighted_url: None,
             #[cfg(not(any(target_os = "macos", windows)))]
             is_x11,
-            #[cfg(not(any(target_os = "macos", windows)))]
+            #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
             wayland_event_queue,
             #[cfg(feature = "dump-raw-render-timings")]
             timing_dump_file: std::fs::File::create("timing.dump").unwrap(),
@@ -346,19 +336,18 @@ impl Display {
     }
 
     /// Update font size and cell dimensions.
-    fn update_glyph_cache(&mut self, config: &Config, font: &Font) {
-        let size_info = &mut self.size_info;
+    ///
+    /// This will return a tuple of the cell width and height.
+    fn update_glyph_cache(&mut self, config: &Config, font: &Font) -> (f32, f32) {
         let cache = &mut self.glyph_cache;
+        let dpr = self.window.dpr;
 
         self.renderer.with_loader(|mut api| {
-            let _ = cache.update_font_size(config, font, size_info.dpr, &mut api);
+            let _ = cache.update_font_size(config, font, dpr, &mut api);
         });
 
-        // Update cell size.
-        let (cell_width, cell_height) =
-            GlyphCache::compute_cell_size(config, &self.glyph_cache.font_metrics());
-        size_info.cell_width = cell_width;
-        size_info.cell_height = cell_height;
+        // Compute new cell sizes.
+        compute_cell_size(config, &self.glyph_cache.font_metrics())
     }
 
     /// Clear glyph cache.
@@ -381,60 +370,58 @@ impl Display {
     ) where
         T: EventListener,
     {
+        let (mut cell_width, mut cell_height) =
+            (self.size_info.cell_width(), self.size_info.cell_height());
+
         // Update font size and cell dimensions.
         if let Some(font) = update_pending.font() {
-            self.update_glyph_cache(config, font);
+            let cell_dimensions = self.update_glyph_cache(config, font);
+            cell_width = cell_dimensions.0;
+            cell_height = cell_dimensions.1;
+
+            info!("Cell size: {} x {}", cell_width, cell_height);
         } else if update_pending.cursor_dirty() {
             self.clear_glyph_cache(config);
         }
 
-        let cell_width = self.size_info.cell_width;
-        let cell_height = self.size_info.cell_height;
-
-        // Recalculate padding.
-        let padding = config.ui_config.window.padding;
-        let mut padding_x = f32::from(padding.x) * self.size_info.dpr as f32;
-        let mut padding_y = f32::from(padding.y) * self.size_info.dpr as f32;
-
-        // Update the window dimensions.
-        if let Some(size) = update_pending.dimensions() {
-            // Ensure we have at least one column and row.
-            self.size_info.width = (size.width as f32).max(cell_width + 2. * padding_x);
-            self.size_info.height = (size.height as f32).max(cell_height + 2. * padding_y);
+        let (mut width, mut height) = (self.size_info.width(), self.size_info.height());
+        if let Some(dimensions) = update_pending.dimensions() {
+            width = dimensions.width as f32;
+            height = dimensions.height as f32;
         }
 
-        // Distribute excess padding equally on all sides.
-        if config.ui_config.window.dynamic_padding {
-            padding_x = dynamic_padding(padding_x, self.size_info.width, cell_width);
-            padding_y = dynamic_padding(padding_y, self.size_info.height, cell_height);
-        }
+        let padding = config.ui_config.window.padding(self.window.dpr);
 
-        self.size_info.padding_x = padding_x.floor() as f32;
-        self.size_info.padding_y = padding_y.floor() as f32;
+        self.size_info = SizeInfo::new(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            padding.0,
+            padding.1,
+            config.ui_config.window.dynamic_padding,
+        );
 
-        let mut pty_size = self.size_info;
-
-        // Subtract message bar lines from pty size.
-        if let Some(message) = message_buffer.message() {
-            let lines = message.text(&self.size_info).len();
-            pty_size.height -= pty_size.cell_height * lines as f32;
-        }
-
-        // Add an extra line for the current search regex.
-        if search_active {
-            pty_size.height -= pty_size.cell_height;
-        }
+        // Update number of column/lines in the viewport.
+        let message_bar_lines =
+            message_buffer.message().map(|m| m.text(&self.size_info).len()).unwrap_or(0);
+        let search_lines = if search_active { 1 } else { 0 };
+        self.size_info.reserve_lines(message_bar_lines + search_lines);
 
         // Resize PTY.
-        pty_resize_handle.on_resize(&pty_size);
+        pty_resize_handle.on_resize(&self.size_info);
 
         // Resize terminal.
-        terminal.resize(pty_size);
+        terminal.resize(self.size_info);
 
         // Resize renderer.
-        let physical = PhysicalSize::new(self.size_info.width as u32, self.size_info.height as u32);
+        let physical =
+            PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
         self.window.resize(physical);
         self.renderer.resize(&self.size_info);
+
+        info!("Padding: {} x {}", self.size_info.padding_x(), self.size_info.padding_y());
+        info!("Width: {}, Height: {}", self.size_info.width(), self.size_info.height());
     }
 
     /// Draw the screen.
@@ -499,10 +486,11 @@ impl Display {
             }
         }
 
-        let mut message_bar_lines = 0;
         if let Some(message) = message_buffer.message() {
+            let search_offset = if search_state.regex().is_some() { 1 } else { 0 };
             let text = message.text(&size_info);
-            message_bar_lines = text.len();
+
+            let start_line = size_info.screen_lines() + search_offset;
 
             let color = match message.ty() {
                 MessageType::Error => config.colors.normal().red,
@@ -511,10 +499,10 @@ impl Display {
 
             // Relay messages to the user.
             let fg = config.colors.primary.background;
-            for (i, message_text) in text.iter().rev().enumerate() {
+            for (i, message_text) in text.iter().enumerate() {
                 render_context.render_string(
                     glyph_cache,
-                    Line(size_info.lines().saturating_sub(i + 1)),
+										start_line + i,
                     &message_text,
                     fg,
                     Some(color),
@@ -546,12 +534,11 @@ impl Display {
                     &mut render_context,
                     config,
                     &size_info,
-                    message_bar_lines,
                     &search_text,
                 );
 
                 // Compute IME position.
-                Point::new(size_info.lines() - 1, Column(search_text.len() - 1))
+                Point::new(size_info.screen_lines() + 1, Column(search_text.chars().count() - 1))
             },
             None => cursor_point,
         };
@@ -593,8 +580,8 @@ impl Display {
             let visual_bell_rect = RenderRect::new(
                 0.,
                 0.,
-                size_info.width,
-                size_info.height,
+                size_info.width(),
+                size_info.height(),
                 config.bell().color,
                 visual_bell_intensity as f32,
             );
@@ -616,10 +603,12 @@ impl Display {
 
         // Frame event should be requested before swaping buffers, since it requires surface
         // `commit`, which is done by swap buffers under the hood.
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         self.request_frame(&self.window);
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        self.window.swap_buffers();
+
+        #[cfg(all(feature = "x11", not(any(target_os = "macos", windows)), not(feature = "dump-raw-render-timings")))]
         if self.is_x11 {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
             // will block to synchronize (this is `glClear` in Alacritty), which causes a
@@ -646,10 +635,11 @@ impl Display {
 
         // Truncate beginning of the search regex if it exceeds the viewport width.
         let num_cols = size_info.cols().0;
-        let label_len = search_label.len();
-        let regex_len = formatted_regex.len();
+        let label_len = search_label.chars().count();
+        let regex_len = formatted_regex.chars().count();
         let truncate_len = min((regex_len + label_len).saturating_sub(num_cols), regex_len);
-        let truncated_regex = &formatted_regex[truncate_len..];
+        let index = formatted_regex.char_indices().nth(truncate_len).map(|(i, _c)| i).unwrap_or(0);
+        let truncated_regex = &formatted_regex[index..];
 
         // Add search label to the beginning of the search regex.
         let mut bar_text = format!("{}{}", search_label, truncated_regex);
@@ -666,7 +656,6 @@ impl Display {
         render_context: &mut RenderContext,
         config: &Config,
         size_info: &SizeInfo,
-        message_bar_lines: usize,
         text: &str,
     ) {
         let num_cols = size_info.cols().0;
@@ -676,8 +665,7 @@ impl Display {
 
         let fg = config.colors.search_bar_foreground();
         let bg = config.colors.search_bar_background();
-        let line = size_info.lines() - message_bar_lines - 1;
-        render_context.render_string(glyph_cache, line, &text, fg, Some(bg));
+        render_context.render_string(glyph_cache, size_info.screen_lines(), &text, fg, Some(bg));
     }
 
     /// Draw render timer.
@@ -696,12 +684,12 @@ impl Display {
         let fg = config.colors.primary.background;
         let bg = config.colors.normal().red;
 
-        render_context.render_string(glyph_cache, size_info.lines() - 2, &timing[..], fg, Some(bg));
+        render_context.render_string(glyph_cache, size_info.screen_lines() - 2, &timing[..], fg, Some(bg));
     }
 
     /// Requst a new frame for a window on Wayland.
     #[inline]
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     fn request_frame(&self, window: &Window) {
         let surface = match window.wayland_surface() {
             Some(surface) => surface,
@@ -720,8 +708,34 @@ impl Display {
     }
 }
 
-/// Calculate padding to spread it evenly around the terminal content.
+/// Calculate the cell dimensions based on font metrics.
+///
+/// This will return a tuple of the cell width and height.
 #[inline]
-fn dynamic_padding(padding: f32, dimension: f32, cell_dimension: f32) -> f32 {
-    padding + ((dimension - 2. * padding) % cell_dimension) / 2.
+fn compute_cell_size(config: &Config, metrics: &crossfont::Metrics) -> (f32, f32) {
+    let offset_x = f64::from(config.ui_config.font.offset.x);
+    let offset_y = f64::from(config.ui_config.font.offset.y);
+    (
+        (metrics.average_advance + offset_x).floor().max(1.) as f32,
+        (metrics.line_height + offset_y).floor().max(1.) as f32,
+    )
+}
+
+/// Calculate the size of the window given padding, terminal dimensions and cell size.
+fn window_size(
+    config: &Config,
+    dimensions: Dimensions,
+    cell_width: f32,
+    cell_height: f32,
+    dpr: f64,
+) -> PhysicalSize<u32> {
+    let padding = config.ui_config.window.padding(dpr);
+
+    let grid_width = cell_width * dimensions.columns.0.max(MIN_COLS) as f32;
+    let grid_height = cell_height * dimensions.lines.0.max(MIN_SCREEN_LINES) as f32;
+
+    let width = (padding.0).mul_add(2., grid_width).floor();
+    let height = (padding.1).mul_add(2., grid_height).floor();
+
+    PhysicalSize::new(width as u32, height as u32)
 }

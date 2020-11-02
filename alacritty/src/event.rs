@@ -19,7 +19,7 @@ use glutin::dpi::PhysicalSize;
 use glutin::event::{ElementState, Event as GlutinEvent, ModifiersState, MouseButton, WindowEvent};
 use glutin::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
 use glutin::platform::desktop::EventLoopExtDesktop;
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use glutin::platform::unix::EventLoopWindowTargetExtUnix;
 use log::info;
 use serde_json as json;
@@ -410,14 +410,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.goto_match(None);
         }
 
-        // Move vi cursor down if resize will pull content from history.
-        if self.terminal.history_size() != 0 && self.terminal.grid().display_offset() == 0 {
-            self.terminal.vi_mode_cursor.point.line += 1;
-        }
-
-        self.display_update_pending.dirty = true;
-        self.search_state.regex = None;
-        self.terminal.dirty = true;
+        self.exit_search();
     }
 
     #[inline]
@@ -429,14 +422,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.search_reset_state();
         }
 
-        // Move vi cursor down if resize will pull from history.
-        if self.terminal.history_size() != 0 && self.terminal.grid().display_offset() == 0 {
-            self.terminal.vi_mode_cursor.point.line += 1;
-        }
-
-        self.display_update_pending.dirty = true;
-        self.search_state.regex = None;
-        self.terminal.dirty = true;
+        self.exit_search();
     }
 
     #[inline]
@@ -628,6 +614,21 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         self.search_state.regex = Some(regex);
     }
 
+    /// Close the search bar.
+    fn exit_search(&mut self) {
+        // Move vi cursor down if resize will pull content from history.
+        if self.terminal.history_size() != 0
+            && self.terminal.grid().display_offset() == 0
+            && self.terminal.screen_lines() > self.terminal.vi_mode_cursor.point.line + 1
+        {
+            self.terminal.vi_mode_cursor.point.line += 1;
+        }
+
+        self.display_update_pending.dirty = true;
+        self.search_state.regex = None;
+        self.terminal.dirty = true;
+    }
+
     /// Get the absolute position of the search origin.
     ///
     /// This takes the relative motion of the viewport since the start of the search into account.
@@ -748,7 +749,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     fn event_queue_empty(&mut self) -> bool {
         let wayland_event_queue = match self.display.wayland_event_queue.as_mut() {
             Some(wayland_event_queue) => wayland_event_queue,
@@ -766,7 +767,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(not(feature = "wayland"), target_os = "macos", windows))]
     fn event_queue_empty(&mut self) -> bool {
         self.event_queue.is_empty()
     }
@@ -862,7 +863,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
             // Skip rendering on Wayland until we get frame event from compositor.
             #[cfg(not(any(target_os = "macos", windows)))]
-            if event_loop.is_wayland() && !self.display.window.should_draw.load(Ordering::Relaxed) {
+            if !self.display.is_x11 && !self.display.window.should_draw.load(Ordering::Relaxed) {
                 return;
             }
 
@@ -873,6 +874,8 @@ impl<N: Notify + OnResize> Processor<N> {
                 if !terminal.visual_bell.completed() {
                     let event: Event = TerminalEvent::Wakeup.into();
                     self.event_queue.push(event.into());
+
+                    *control_flow = ControlFlow::Poll;
                 }
 
                 // Redraw screen.
@@ -897,8 +900,8 @@ impl<N: Notify + OnResize> Processor<N> {
     ///
     /// Doesn't take self mutably due to borrow checking.
     fn handle_event<T>(
-        event: GlutinEvent<Event>,
-        processor: &mut input::Processor<T, ActionContext<N, T>>,
+        event: GlutinEvent<'_, Event>,
+        processor: &mut input::Processor<'_, T, ActionContext<'_, N, T>>,
     ) where
         T: EventListener,
     {
@@ -914,7 +917,7 @@ impl<N: Notify + OnResize> Processor<N> {
                     // Resize to event's dimensions, since no resize event is emitted on Wayland.
                     display_update_pending.set_dimensions(PhysicalSize::new(width, height));
 
-                    processor.ctx.size_info.dpr = scale_factor;
+                    processor.ctx.window.dpr = scale_factor;
                     processor.ctx.terminal.dirty = true;
                 },
                 Event::Message(message) => {
@@ -942,7 +945,9 @@ impl<N: Notify + OnResize> Processor<N> {
                     TerminalEvent::Bell => {
                         let bell_command = processor.ctx.config.bell().command.as_ref();
                         let _ = bell_command.map(|cmd| start_daemon(cmd.program(), cmd.args()));
-                        processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        if processor.ctx.terminal.mode().contains(TermMode::URGENCY_HINTS) {
+                            processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        }
                     },
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
                         processor.ctx.clipboard.store(clipboard_type, content);
@@ -1041,7 +1046,7 @@ impl<N: Notify + OnResize> Processor<N> {
     }
 
     /// Check if an event is irrelevant and can be skipped.
-    fn skip_event(event: &GlutinEvent<Event>) -> bool {
+    fn skip_event(event: &GlutinEvent<'_, Event>) -> bool {
         match event {
             GlutinEvent::WindowEvent { event, .. } => matches!(
                 event,
@@ -1063,8 +1068,10 @@ impl<N: Notify + OnResize> Processor<N> {
         }
     }
 
-    fn reload_config<T>(path: &PathBuf, processor: &mut input::Processor<T, ActionContext<N, T>>)
-    where
+    fn reload_config<T>(
+        path: &PathBuf,
+        processor: &mut input::Processor<'_, T, ActionContext<'_, N, T>>,
+    ) where
         T: EventListener,
     {
         if !processor.ctx.message_buffer.is_empty() {
@@ -1098,7 +1105,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
         // Update display if padding options were changed.
         let window_config = &processor.ctx.config.ui_config.window;
-        if window_config.padding != config.ui_config.window.padding
+        if window_config.padding(1.) != config.ui_config.window.padding(1.)
             || window_config.dynamic_padding != config.ui_config.window.dynamic_padding
         {
             processor.ctx.display_update_pending.dirty = true;
@@ -1111,7 +1118,7 @@ impl<N: Notify + OnResize> Processor<N> {
             processor.ctx.window.set_title(&config.ui_config.window.title);
         }
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         if processor.ctx.event_loop.is_wayland() {
             processor.ctx.window.set_wayland_theme(&config.colors);
         }

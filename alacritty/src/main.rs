@@ -1,12 +1,17 @@
 //! Alacritty - The GPU Enhanced Terminal.
 
+#![warn(rust_2018_idioms, future_incompatible)]
 #![deny(clippy::all, clippy::if_not_else, clippy::enum_glob_use, clippy::wrong_pub_self_convention)]
+#![cfg_attr(feature = "cargo-clippy", deny(warnings))]
 #![cfg_attr(all(test, feature = "bench"), feature(test))]
 // With the default subsystem, 'console', windows creates an additional console
 // window for the program.
 // This is silently ignored on non-windows systems.
 // See https://msdn.microsoft.com/en-us/library/4cc7ya5b.aspx for more details.
 #![windows_subsystem = "windows"]
+
+#[cfg(not(any(feature = "x11", feature = "wayland", target_os = "macos", windows)))]
+compile_error!(r#"at least one of the "x11"/"wayland" features must be enabled"#);
 
 #[cfg(target_os = "macos")]
 use std::env;
@@ -45,7 +50,7 @@ mod scheduler;
 mod url;
 mod window;
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 mod wayland_theme;
 
 mod gl {
@@ -141,7 +146,11 @@ fn run(
     // The display manages a window and can draw the terminal.
     let display = Display::new(&config, &window_event_loop)?;
 
-    info!("PTY dimensions: {:?} x {:?}", display.size_info.lines(), display.size_info.cols());
+    info!(
+        "PTY dimensions: {:?} x {:?}",
+        display.size_info.screen_lines(),
+        display.size_info.cols()
+    );
 
     // Create the terminal.
     //
@@ -156,10 +165,7 @@ fn run(
     // The PTY forks a process to run the shell on the slave side of the
     // pseudoterminal. A file descriptor for the master side is retained for
     // reading/writing to the shell.
-    #[cfg(not(any(target_os = "macos", windows)))]
     let pty = tty::new(&config, &display.size_info, display.window.x11_window_id());
-    #[cfg(any(target_os = "macos", windows))]
-    let pty = tty::new(&config, &display.size_info, None);
 
     // Create the pseudoterminal I/O loop.
     //

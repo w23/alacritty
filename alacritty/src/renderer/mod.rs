@@ -46,7 +46,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            },
+            }
         }
     }
 }
@@ -106,10 +106,10 @@ impl Renderer {
     pub fn resize(&mut self, size: &term::SizeInfo) {
         unsafe {
             gl::Viewport(
-                size.padding_x as i32,
-                size.padding_y as i32,
-                size.width as i32 - 2 * size.padding_x as i32,
-                size.height as i32 - 2 * size.padding_y as i32,
+                size.padding_x() as i32,
+                size.padding_y() as i32,
+                size.width() as i32 - 2 * size.padding_x() as i32,
+                size.height() as i32 - 2 * size.padding_y() as i32,
             );
         }
 
@@ -193,6 +193,13 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn update_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+        if cell.line >= self.size_info.screen_lines() {
+            return;
+        }
+        if cell.column >= self.size_info.cols() {
+            return;
+        }
+
         let wide = match cell.flags & Flags::WIDE_CHAR {
             Flags::WIDE_CHAR => true,
             _ => false,
@@ -227,22 +234,22 @@ impl<'a> RenderContext<'a> {
                             glyph_grid.line as f32,
                             cell.fg,
                         );
-                    },
+                    }
 
                     AtlasGlyph::Quad(quad) => {
                         let glyph_quad = GlyphQuad {
                             glyph: quad,
                             pos: Vec2::<i16> {
-                                x: cell.column.0 as i16 * self.size_info.cell_width as i16,
-                                y: cell.line.0 as i16 * self.size_info.cell_height as i16,
+                                x: cell.column.0 as i16 * self.size_info.cell_width() as i16,
+                                y: cell.line.0 as i16 * self.size_info.cell_height() as i16,
                             },
                             fg: cell.fg,
                         };
 
                         self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-                    },
+                    }
                 }
-            },
+            }
 
             RenderableCellContent::Chars(chars) => {
                 // Get font key for cell.
@@ -299,7 +306,7 @@ impl<'a> RenderContext<'a> {
                         true,
                     );
                 }
-            },
+            }
         };
     }
 
@@ -315,7 +322,7 @@ impl<'a> RenderContext<'a> {
         match glyph {
             AtlasGlyph::Grid(grid_glyph) => {
                 self.this.grids.update_cell(cell, grid_glyph);
-            },
+            }
             AtlasGlyph::Quad(quad_glyph) => {
                 let glyph_quad = GlyphQuad {
                     glyph: quad_glyph,
@@ -330,14 +337,14 @@ impl<'a> RenderContext<'a> {
                         } else {
                             0
                         } + cell.column.0 as i16)
-                            * self.size_info.cell_width as i16,
-                        y: cell.line.0 as i16 * self.size_info.cell_height as i16,
+                            * self.size_info.cell_width() as i16,
+                        y: cell.line.0 as i16 * self.size_info.cell_height() as i16,
                     },
                     fg: cell.fg,
                 };
 
                 self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-            },
+            }
         }
     }
 
