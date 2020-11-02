@@ -267,6 +267,8 @@ impl Drop for ShaderProgram {
     }
 }
 
+/// Macro to generate a specific shader program implementation based on shader sources and a list of
+/// uniforms
 macro_rules! declare_program {
 	($struct:ident, $vpath:ident, $vsrc:ident, $fpath:ident, $fsrc:ident {$( $uniform:ident ),*}) => {
 	  #[derive(Debug)]
@@ -326,6 +328,8 @@ macro_rules! declare_program {
 	}
 }
 
+// TODO is it possible to avoid explicitly making these, and just provide 2 filenames to
+// declare_program macro instead?
 #[cfg(feature = "live-shader-reload")]
 static SCREEN_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/screen.v.glsl");
 #[cfg(feature = "live-shader-reload")]
