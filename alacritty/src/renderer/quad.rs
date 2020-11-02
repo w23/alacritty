@@ -24,13 +24,108 @@ pub struct GlyphQuad<'a> {
 
 #[derive(Debug)]
 pub struct QuadGlyphRenderer {
-    program: GlyphRectShaderProgram,
     atlas_groups: Vec<AtlasGroup>,
+
+    // GL objects for shared use. There's no point in having these per atlas/batch, as their
+    // content is completely transient currently.
+    program: GlyphRectShaderProgram,
+    vao: GLuint,
+    vbo: GLuint,
+    ebo: GLuint,
 }
 
 impl QuadGlyphRenderer {
     pub fn new() -> Self {
-        Self { atlas_groups: Vec::new(), program: GlyphRectShaderProgram::new().unwrap() }
+        let mut vao: GLuint = 0;
+        let mut vbo: GLuint = 0;
+        let mut ebo: GLuint = 0;
+
+        // Pre-generate indices once.
+        // TODO there should be a solution using flat_map, but I failed to find one
+        let indices = {
+            let mut indices = Vec::<u16>::new();
+            for index in 0 as u16..(65536 / 4) as u16 {
+                let i = index * 4;
+                indices.push(i);
+                indices.push(i + 1);
+                indices.push(i + 2);
+
+                indices.push(i + 2);
+                indices.push(i + 3);
+                indices.push(i + 1);
+            }
+            indices
+        };
+
+        unsafe {
+            gl::GenVertexArrays(1, &mut vao);
+            gl::GenBuffers(1, &mut vbo);
+            gl::GenBuffers(1, &mut ebo);
+
+            // Set up VAO bindings.
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+
+            // Position.
+            gl::VertexAttribPointer(
+                0,
+                2,
+                gl::SHORT,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                ptr::null(),
+            );
+            gl::EnableVertexAttribArray(0);
+
+            // uv.
+            gl::VertexAttribPointer(
+                1,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, u) as *const _,
+            );
+            gl::EnableVertexAttribArray(1);
+
+            // Foreground color.
+            gl::VertexAttribPointer(
+                2,
+                3,
+                gl::UNSIGNED_BYTE,
+                gl::TRUE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, fg) as *const _,
+            );
+            gl::EnableVertexAttribArray(2);
+
+            // Flags.
+            gl::VertexAttribPointer(
+                3,
+                1,
+                gl::UNSIGNED_BYTE,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, flags) as *const _,
+            );
+            gl::EnableVertexAttribArray(3);
+
+            // Pre-upload indices.
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (indices.len() * std::mem::size_of::<u16>()) as isize,
+                indices.as_ptr() as *const _,
+                gl::STATIC_DRAW,
+            );
+        }
+        Self {
+            vao,
+            vbo,
+            ebo,
+            atlas_groups: Vec::new(),
+            program: GlyphRectShaderProgram::new().unwrap(),
+        }
     }
 
     pub fn clear_atlas(&mut self) {
@@ -111,6 +206,12 @@ impl QuadGlyphRenderer {
             // Change blending strategy.
             gl::Enable(gl::BLEND);
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+
+            // Set VAO bindings.
+            gl::BindVertexArray(self.vao);
+
+            // VBO is not part of VAO state. VBO binding will be used for uploading vertex data.
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
         }
 
         for group in &mut self.atlas_groups {
@@ -195,79 +296,15 @@ struct Vertex {
 
 #[derive(Debug)]
 struct Batch {
-    vao: GLuint,
-    vbo: GLuint,
-    ebo: GLuint,
-    indices: Vec<u16>,
     vertices: Vec<Vertex>,
 }
 
 impl Batch {
     fn new() -> Result<Self, Error> {
-        let mut vao: GLuint = 0;
-        let mut vbo: GLuint = 0;
-        let mut ebo: GLuint = 0;
-
-        unsafe {
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::GenBuffers(1, &mut ebo);
-
-            // Set up bindings.
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-
-            // Position.
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::SHORT,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-
-            // uv.
-            gl::VertexAttribPointer(
-                1,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, u) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-
-            // Foreground color.
-            gl::VertexAttribPointer(
-                2,
-                3,
-                gl::UNSIGNED_BYTE,
-                gl::TRUE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, fg) as *const _,
-            );
-            gl::EnableVertexAttribArray(2);
-
-            // Flags.
-            gl::VertexAttribPointer(
-                3,
-                1,
-                gl::UNSIGNED_BYTE,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, flags) as *const _,
-            );
-            gl::EnableVertexAttribArray(3);
-        }
-
-        Ok(Self { vao, vbo, ebo, indices: Vec::new(), vertices: Vec::new() })
+        Ok(Self { vertices: Vec::new() })
     }
 
     fn clear(&mut self) {
-        self.indices.clear();
         self.vertices.clear();
     }
 
@@ -276,7 +313,6 @@ impl Batch {
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);
         }
-        let index = index as u16;
 
         let g = glyph.glyph;
 
@@ -312,35 +348,15 @@ impl Batch {
             flags,
         });
 
-        self.indices.push(index);
-        self.indices.push(index + 1);
-        self.indices.push(index + 2);
-
-        self.indices.push(index + 2);
-        self.indices.push(index + 3);
-        self.indices.push(index + 1);
-
         Ok(())
     }
 
     fn draw(&mut self) {
-        if self.indices.is_empty() {
+        if self.vertices.is_empty() {
             return;
         }
 
         unsafe {
-            // Set VAO bindings
-            gl::BindVertexArray(self.vao);
-
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (self.indices.len() * std::mem::size_of::<u16>()) as isize,
-                self.indices.as_ptr() as *const _,
-                gl::STREAM_DRAW,
-            );
-
-            // VBO is not part of VAO state
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
                 (self.vertices.len() * std::mem::size_of::<Vertex>()) as isize,
@@ -350,7 +366,7 @@ impl Batch {
 
             gl::DrawElements(
                 gl::TRIANGLES,
-                self.indices.len() as i32,
+                (self.vertices.len() / 4 * 6) as i32,
                 gl::UNSIGNED_SHORT,
                 ptr::null(),
             );
