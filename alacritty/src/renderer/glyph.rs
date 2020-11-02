@@ -393,34 +393,6 @@ impl GlyphCache {
         rasterizer.metrics(regular, font.size)
     }
 
-    pub fn calculate_dimensions(
-        window_config: &WindowConfig,
-        dpr: f64,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<(u32, u32)> {
-        let dimensions = window_config.dimensions;
-
-        if dimensions.columns_u32() == 0
-            || dimensions.lines_u32() == 0
-            || window_config.startup_mode != StartupMode::Windowed
-        {
-            return None;
-        }
-
-        let padding_x = f64::from(window_config.padding.x) * dpr;
-        let padding_y = f64::from(window_config.padding.y) * dpr;
-
-        // Calculate new size based on cols/lines specified in config.
-        let grid_width = cell_width as u32 * dimensions.columns_u32();
-        let grid_height = cell_height as u32 * dimensions.lines_u32();
-
-        let width = padding_x.mul_add(2., f64::from(grid_width)).floor();
-        let height = padding_y.mul_add(2., f64::from(grid_height)).floor();
-
-        Some((width as u32, height as u32))
-    }
-
     /// Calculate the cell dimensions based on font metrics.
     #[inline]
     pub fn compute_cell_size(config: &Config, metrics: &crossfont::Metrics) -> (f32, f32) {

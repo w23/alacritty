@@ -502,7 +502,7 @@ impl Display {
             for (i, message_text) in text.iter().enumerate() {
                 render_context.render_string(
                     glyph_cache,
-										start_line + i,
+                    start_line + i,
                     &message_text,
                     fg,
                     Some(color),
@@ -608,7 +608,11 @@ impl Display {
 
         self.window.swap_buffers();
 
-        #[cfg(all(feature = "x11", not(any(target_os = "macos", windows)), not(feature = "dump-raw-render-timings")))]
+        #[cfg(all(
+            feature = "x11",
+            not(any(target_os = "macos", windows)),
+            not(feature = "dump-raw-render-timings")
+        ))]
         if self.is_x11 {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
             // will block to synchronize (this is `glClear` in Alacritty), which causes a
@@ -684,7 +688,13 @@ impl Display {
         let fg = config.colors.primary.background;
         let bg = config.colors.normal().red;
 
-        render_context.render_string(glyph_cache, size_info.screen_lines() - 2, &timing[..], fg, Some(bg));
+        render_context.render_string(
+            glyph_cache,
+            size_info.screen_lines() - 2,
+            &timing[..],
+            fg,
+            Some(bg),
+        );
     }
 
     /// Requst a new frame for a window on Wayland.

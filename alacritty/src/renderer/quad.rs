@@ -191,10 +191,10 @@ impl QuadGlyphRenderer {
         // Swap to rectangle rendering program.
         unsafe {
             // Add padding to viewport.
-            let pad_x = size_info.padding_x as i32;
-            let pad_y = size_info.padding_y as i32;
-            let width = size_info.width as i32 - 2 * pad_x;
-            let height = size_info.height as i32 - 2 * pad_y;
+            let pad_x = size_info.padding_x() as i32;
+            let pad_y = size_info.padding_y() as i32;
+            let width = size_info.width() as i32 - 2 * pad_x;
+            let height = size_info.height() as i32 - 2 * pad_y;
             gl::Viewport(pad_x, pad_y, width, height);
 
             // Swap program.
@@ -318,7 +318,7 @@ impl Batch {
 
         // Calculate rectangle position.
         let x = glyph.pos.x + g.left;
-        let y = glyph.pos.y + (size_info.cell_height as i16 - g.top);
+        let y = glyph.pos.y + (size_info.cell_height() as i16 - g.top);
         let fg = Rgb::from(glyph.fg);
         let flags = if g.colored { 1 } else { 0 };
 
