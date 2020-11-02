@@ -55,31 +55,10 @@ impl SolidRectRenderer {
             gl::GenVertexArrays(1, &mut vao);
             gl::GenBuffers(1, &mut vbo);
             gl::GenBuffers(1, &mut ebo);
-        }
 
-        Ok(Self {
-            program: RectShaderProgram::new()?,
-            vao,
-            vbo,
-            ebo,
-            indices: Vec::new(),
-            vertices: Vec::new(),
-        })
-    }
-
-    pub fn draw(&mut self, size_info: &SizeInfo, rects: Vec<RenderRect>) {
-        if rects.is_empty() {
-            return;
-        }
-
-        // Prepare common state
-        unsafe {
-            // Setup buffers
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-
-            gl::UseProgram(self.program.get_id());
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
 
             // Position.
             gl::VertexAttribPointer(
@@ -102,13 +81,49 @@ impl SolidRectRenderer {
                 offset_of!(Vertex, color) as *const _,
             );
             gl::EnableVertexAttribArray(1);
+        }
 
+        Ok(Self {
+            program: RectShaderProgram::new()?,
+            vao,
+            vbo,
+            ebo,
+            indices: Vec::new(),
+            vertices: Vec::new(),
+        })
+    }
+
+    pub fn draw(&mut self, size_info: &SizeInfo, rects: Vec<RenderRect>) {
+        if rects.is_empty() {
+            return;
+        }
+
+        #[cfg(feature = "live-shader-reload")]
+        {
+            match self.program.poll() {
+                Err(e) => {
+                    error!("shader error: {}", e);
+                },
+                Ok(updated) if updated => {
+                    debug!("updated shader: {:?}", self.program);
+                },
+                _ => {},
+            }
+        }
+
+        // Prepare common state
+        unsafe {
             // Remove padding from viewport.
             gl::Viewport(0, 0, size_info.width as i32, size_info.height as i32);
 
-            // Change blending strategy.
             gl::Enable(gl::BLEND);
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
+
+            // Setup bindings. VAO will set up attribs and EBO, but not VBO.
+            gl::BindVertexArray(self.vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+
+            gl::UseProgram(self.program.get_id());
         }
 
         let center_x = size_info.width / 2.;
@@ -121,27 +136,6 @@ impl SolidRectRenderer {
         }
 
         self.draw_accumulated();
-
-        // FIXME should we really do this here? Can we depend on next stage properly resetting its
-        // state?
-        unsafe {
-            // FIXME should we really do this here? Can we depend on next stage properly resetting
-            // its state? Reset data and buffers.
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            // Deactivate rectangle program again.
-            // Reset blending strategy.
-            gl::Disable(gl::BLEND);
-            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
-
-            let padding_x = size_info.padding_x as i32;
-            let padding_y = size_info.padding_y as i32;
-            let width = size_info.width as i32;
-            let height = size_info.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-        }
     }
 
     fn append_rect(
@@ -191,19 +185,6 @@ impl SolidRectRenderer {
     fn draw_accumulated(&mut self) {
         if self.indices.is_empty() {
             return;
-        }
-
-        #[cfg(feature = "live-shader-reload")]
-        {
-            match self.program.poll() {
-                Err(e) => {
-                    error!("shader error: {}", e);
-                },
-                Ok(updated) if updated => {
-                    debug!("updated shader: {:?}", self.program);
-                },
-                _ => {},
-            }
         }
 
         // Upload accumulated buffers

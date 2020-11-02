@@ -602,7 +602,7 @@ impl Display {
         }
 
         // Draw rectangles.
-        render_context.draw_rects(&size_info, rects);
+        render_context.draw_rects(rects);
 
         drop(render_context);
 

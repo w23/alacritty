@@ -95,7 +95,7 @@ impl QuadGlyphRenderer {
 
         // Swap to rectangle rendering program.
         unsafe {
-            // Add padding to viewport
+            // Add padding to viewport.
             let pad_x = size_info.padding_x as i32;
             let pad_y = size_info.padding_y as i32;
             let width = size_info.width as i32 - 2 * pad_x;
@@ -111,36 +111,10 @@ impl QuadGlyphRenderer {
             // Change blending strategy.
             gl::Enable(gl::BLEND);
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
-
-            // Atlas will be bound to slot 0
-            gl::ActiveTexture(gl::TEXTURE0);
         }
 
         for group in &mut self.atlas_groups {
             group.draw();
-        }
-
-        // FIXME should we really do this?
-        // maybe whoever needs some specific gl state can set it themselves?
-        unsafe {
-            // Deactivate rectangle program again.
-            // Reset blending strategy.
-            gl::Disable(gl::BLEND);
-            gl::BlendFunc(gl::SRC_COLOR, gl::ONE_MINUS_SRC_COLOR);
-
-            // Reset data and buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            // FIXME ??? track viewport wrt padding properly everywhere
-            let padding_x = size_info.padding_x as i32;
-            let padding_y = size_info.padding_y as i32;
-            let width = size_info.width as i32;
-            let height = size_info.height as i32;
-            gl::Viewport(padding_x, padding_y, width - 2 * padding_x, height - 2 * padding_y);
-
-            // Disable program.
-            gl::UseProgram(0);
         }
     }
 }
@@ -212,6 +186,7 @@ impl Rgb {
 struct Vertex {
     x: i16,
     y: i16,
+    // TODO these can also be u/i16
     u: f32,
     v: f32,
     fg: Rgb,
@@ -237,6 +212,55 @@ impl Batch {
             gl::GenVertexArrays(1, &mut vao);
             gl::GenBuffers(1, &mut vbo);
             gl::GenBuffers(1, &mut ebo);
+
+            // Set up bindings.
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+
+            // Position.
+            gl::VertexAttribPointer(
+                0,
+                2,
+                gl::SHORT,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                ptr::null(),
+            );
+            gl::EnableVertexAttribArray(0);
+
+            // uv.
+            gl::VertexAttribPointer(
+                1,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, u) as *const _,
+            );
+            gl::EnableVertexAttribArray(1);
+
+            // Foreground color.
+            gl::VertexAttribPointer(
+                2,
+                3,
+                gl::UNSIGNED_BYTE,
+                gl::TRUE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, fg) as *const _,
+            );
+            gl::EnableVertexAttribArray(2);
+
+            // Flags.
+            gl::VertexAttribPointer(
+                3,
+                1,
+                gl::UNSIGNED_BYTE,
+                gl::FALSE,
+                (size_of::<Vertex>()) as _,
+                offset_of!(Vertex, flags) as *const _,
+            );
+            gl::EnableVertexAttribArray(3);
         }
 
         Ok(Self { vao, vbo, ebo, indices: Vec::new(), vertices: Vec::new() })
@@ -305,10 +329,9 @@ impl Batch {
         }
 
         unsafe {
-            // Setup data and buffers.
+            // Set VAO bindings
             gl::BindVertexArray(self.vao);
 
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
             gl::BufferData(
                 gl::ELEMENT_ARRAY_BUFFER,
                 (self.indices.len() * std::mem::size_of::<u16>()) as isize,
@@ -316,6 +339,7 @@ impl Batch {
                 gl::STREAM_DRAW,
             );
 
+            // VBO is not part of VAO state
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
@@ -323,50 +347,6 @@ impl Batch {
                 self.vertices.as_ptr() as *const _,
                 gl::STREAM_DRAW,
             );
-
-            // Position
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::SHORT,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-
-            // uv
-            gl::VertexAttribPointer(
-                1,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, u) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-
-            // Foreground color
-            gl::VertexAttribPointer(
-                2,
-                3,
-                gl::UNSIGNED_BYTE,
-                gl::TRUE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, fg) as *const _,
-            );
-            gl::EnableVertexAttribArray(2);
-
-            // Flags
-            gl::VertexAttribPointer(
-                3,
-                1,
-                gl::UNSIGNED_BYTE,
-                gl::FALSE,
-                (size_of::<Vertex>()) as _,
-                offset_of!(Vertex, flags) as *const _,
-            );
-            gl::EnableVertexAttribArray(3);
 
             gl::DrawElements(
                 gl::TRIANGLES,

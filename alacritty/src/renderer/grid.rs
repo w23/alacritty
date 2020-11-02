@@ -85,10 +85,9 @@ impl GridGlyphRenderer {
                 gl::STREAM_DRAW,
             );
 
-            // Cleanup.
-            gl::BindVertexArray(0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+            // Set up VAO bindings for future use.
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
+            gl::EnableVertexAttribArray(0);
         }
 
         Ok(Self {
@@ -313,9 +312,6 @@ impl GridGlyphRenderer {
             );
 
             gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
-            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 0, ptr::null());
-            gl::EnableVertexAttribArray(0);
         }
 
         for (pass_num, pass) in (&self.grid_passes).iter().enumerate() {
@@ -336,9 +332,6 @@ impl GridGlyphRenderer {
                 gl::Uniform1i(self.program.u_main_pass, main_pass as i32);
                 self.apply_cursor_uniform(pass_num);
 
-                gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, pass.atlas.tex);
-
                 gl::ActiveTexture(gl::TEXTURE1);
                 gl::BindTexture(gl::TEXTURE_2D, self.screen_glyphs_ref_tex);
                 upload_texture(
@@ -347,6 +340,10 @@ impl GridGlyphRenderer {
                     PixelFormat::RGB8,
                     pass.glyphs.as_ptr() as *const _,
                 );
+
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, pass.atlas.tex);
+
                 gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
             }
 
@@ -357,12 +354,6 @@ impl GridGlyphRenderer {
                     gl::BlendFuncSeparate(gl::ONE, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE);
                 }
             }
-        }
-
-        unsafe {
-            gl::DisableVertexAttribArray(0);
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindVertexArray(0);
         }
     }
 }

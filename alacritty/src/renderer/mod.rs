@@ -100,11 +100,6 @@ impl Renderer {
     where
         F: FnOnce(LoaderApi<'_>) -> T,
     {
-        unsafe {
-            // FIXME needed?
-            gl::ActiveTexture(gl::TEXTURE0);
-        }
-
         func(LoaderApi { renderer: self })
     }
 
@@ -346,11 +341,25 @@ impl<'a> RenderContext<'a> {
         }
     }
 
+    // Note on rendering. It consists of three passes:
+    // 0. Enumerate the entire terminal grid and build up internal lists of items to render.
+    // 1. Render glyphs with full screen shader passes.
+    // 2. Render glyphs that need to be rendered using quads.
+    // 3. Render rects (e.g. underline, strikeout).
+    //
+    // Each of these passes is responsible for:
+    // - setting up their required GL states such as viewports, blending modes, shader programs,
+    //   VAO/VBO bindings
+    // - clearing active texture to gl::TEXTURE0.
+    // They are not required to reset any of their GL state after use. The next pass needs to set it
+    // itself.
+
     /// Draw all rectangles simultaneously to prevent excessive program swaps.
-    pub fn draw_rects(&mut self, size_info: &term::SizeInfo, rects: Vec<RenderRect>) {
-        self.this.solid_rects.draw(size_info, rects);
+    pub fn draw_rects(&mut self, rects: Vec<RenderRect>) {
+        self.this.solid_rects.draw(self.size_info, rects);
     }
 
+    /// Perform drawing of all text in the correct order.
     pub fn draw_text(&mut self) {
         self.this.grids.draw(self.size_info);
         self.this.quad_glyphs.draw(self.size_info);
