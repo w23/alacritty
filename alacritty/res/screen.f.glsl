@@ -143,7 +143,7 @@ void main() {
 
 		float la = h1(s+=j) * 6.28;
 		float lr = .05 * sqrt(h1(s+=.5));
-		float f = 3. + 2. * (n1(t) - .5);
+		float f = 2.29; //3. + 2. * (n1(t) - .5);
 		float fov = .5;
 
 		vec3 at = vec3(cuv*fov, -1.) * f, O, D;
@@ -152,9 +152,9 @@ void main() {
 			O.xz *= Rm(.2 + .1 * sin(t*.7));
 			O.yz *= Rm(-.2 - .1 *cos(t*.3));
 			D = normalize(at - O);
-			D.xz *= Rm(.2 + .1 * sin(t*.7));
-			D.yz *= Rm(-.2 - .1 *cos(t*.3));
-			O += vec3(1., .5, 3.3);
+			/* D.xz *= Rm(.2 + .1 * sin(t*.7)); */
+			/* D.yz *= Rm(-.2 - .1 *cos(t*.3)); */
+			O += vec3(-1.2, .9, 2.4);
 
 		for (float i = 0.; i < 4.; ++i) {
 			s = mod(i+s, 100.);
