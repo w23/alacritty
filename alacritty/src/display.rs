@@ -606,8 +606,6 @@ impl Display {
         #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         self.request_frame(&self.window);
 
-        self.window.swap_buffers();
-
         #[cfg(all(feature = "x11", not(any(target_os = "macos", windows)), not(feature = "dump-raw-render-timings")))]
         if self.is_x11 {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
