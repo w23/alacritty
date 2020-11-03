@@ -117,7 +117,7 @@ impl GridGlyphRenderer {
     /// Resize buffers for a new screen resolution.
     pub fn resize(&mut self, size_info: &SizeInfo) {
         self.columns = size_info.cols().0;
-        self.lines = size_info.screen_lines().0;
+        self.lines = size_info.visible_lines().0;
         let cells = self.columns * self.lines;
 
         self.screen_colors_bg.resize(cells, [0u8; 4]);

@@ -637,6 +637,9 @@ pub struct SizeInfo {
     /// Number of lines in the viewport.
     screen_lines: Line,
 
+    /// Number of total visible lines, including screen_lines and reserved lines.
+    visible_lines: Line,
+
     /// Number of columns in the viewport.
     cols: Column,
 }
@@ -671,6 +674,7 @@ impl SizeInfo {
             padding_x: padding_x.floor(),
             padding_y: padding_y.floor(),
             screen_lines,
+            visible_lines: screen_lines,
             cols,
         }
     }
@@ -738,6 +742,11 @@ impl SizeInfo {
     #[inline]
     pub fn screen_lines(&self) -> Line {
         self.screen_lines
+    }
+
+    #[inline]
+    pub fn visible_lines(&self) -> Line {
+        self.visible_lines
     }
 
     #[inline]
