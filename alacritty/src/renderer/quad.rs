@@ -170,7 +170,7 @@ impl QuadGlyphRenderer {
         }
     }
 
-    pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) {
+    pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad<'_>) {
         self.atlas_groups[glyph.glyph.atlas_index].add(size_info, glyph);
     }
 
@@ -241,7 +241,7 @@ impl AtlasGroup {
         }
     }
 
-    fn add(&mut self, size_info: &SizeInfo, glyph_rect: &GlyphQuad) {
+    fn add(&mut self, size_info: &SizeInfo, glyph_rect: &GlyphQuad<'_>) {
         loop {
             if !self.batches.is_empty() {
                 match self.batches.last_mut().unwrap().add(size_info, glyph_rect) {
@@ -308,7 +308,7 @@ impl Batch {
         self.vertices.clear();
     }
 
-    fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad) -> Result<(), RectAddError> {
+    fn add(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad<'_>) -> Result<(), RectAddError> {
         let index = self.vertices.len();
         if index >= 65536 - 4 {
             return Err(RectAddError::Full);

@@ -606,7 +606,11 @@ impl Display {
         #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         self.request_frame(&self.window);
 
-        #[cfg(all(feature = "x11", not(any(target_os = "macos", windows)), not(feature = "dump-raw-render-timings")))]
+        #[cfg(all(
+            feature = "x11",
+            not(any(target_os = "macos", windows)),
+            not(feature = "dump-raw-render-timings")
+        ))]
         if self.is_x11 {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
             // will block to synchronize (this is `glClear` in Alacritty), which causes a
@@ -651,7 +655,7 @@ impl Display {
     /// Draw current search regex.
     fn draw_search(
         glyph_cache: &mut GlyphCache,
-        render_context: &mut RenderContext,
+        render_context: &mut RenderContext<'_>,
         config: &Config,
         size_info: &SizeInfo,
         text: &str,
@@ -669,7 +673,7 @@ impl Display {
     /// Draw render timer.
     fn draw_render_timer(
         glyph_cache: &mut GlyphCache,
-        render_context: &mut RenderContext,
+        render_context: &mut RenderContext<'_>,
         config: &Config,
         size_info: &SizeInfo,
         meter: &Meter,
