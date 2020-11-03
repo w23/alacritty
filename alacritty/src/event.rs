@@ -19,7 +19,7 @@ use glutin::dpi::PhysicalSize;
 use glutin::event::{ElementState, Event as GlutinEvent, ModifiersState, MouseButton, WindowEvent};
 use glutin::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
 use glutin::platform::desktop::EventLoopExtDesktop;
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use glutin::platform::unix::EventLoopWindowTargetExtUnix;
 use log::info;
 use serde_json as json;
@@ -749,7 +749,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     fn event_queue_empty(&mut self) -> bool {
         let wayland_event_queue = match self.display.wayland_event_queue.as_mut() {
             Some(wayland_event_queue) => wayland_event_queue,
@@ -767,7 +767,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
     /// Return `true` if `event_queue` is empty, `false` otherwise.
     #[inline]
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(not(feature = "wayland"), target_os = "macos", windows))]
     fn event_queue_empty(&mut self) -> bool {
         self.event_queue.is_empty()
     }
@@ -863,7 +863,7 @@ impl<N: Notify + OnResize> Processor<N> {
 
             // Skip rendering on Wayland until we get frame event from compositor.
             #[cfg(not(any(target_os = "macos", windows)))]
-            if event_loop.is_wayland() && !self.display.window.should_draw.load(Ordering::Relaxed) {
+            if !self.display.is_x11 && !self.display.window.should_draw.load(Ordering::Relaxed) {
                 return;
             }
 
@@ -874,6 +874,8 @@ impl<N: Notify + OnResize> Processor<N> {
                 if !terminal.visual_bell.completed() {
                     let event: Event = TerminalEvent::Wakeup.into();
                     self.event_queue.push(event.into());
+
+                    *control_flow = ControlFlow::Poll;
                 }
 
                 // Redraw screen.
@@ -898,8 +900,8 @@ impl<N: Notify + OnResize> Processor<N> {
     ///
     /// Doesn't take self mutably due to borrow checking.
     fn handle_event<T>(
-        event: GlutinEvent<Event>,
-        processor: &mut input::Processor<T, ActionContext<N, T>>,
+        event: GlutinEvent<'_, Event>,
+        processor: &mut input::Processor<'_, T, ActionContext<'_, N, T>>,
     ) where
         T: EventListener,
     {
@@ -943,7 +945,9 @@ impl<N: Notify + OnResize> Processor<N> {
                     TerminalEvent::Bell => {
                         let bell_command = processor.ctx.config.bell().command.as_ref();
                         let _ = bell_command.map(|cmd| start_daemon(cmd.program(), cmd.args()));
-                        processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        if processor.ctx.terminal.mode().contains(TermMode::URGENCY_HINTS) {
+                            processor.ctx.window.set_urgent(!processor.ctx.terminal.is_focused);
+                        }
                     },
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
                         processor.ctx.clipboard.store(clipboard_type, content);
@@ -1042,7 +1046,7 @@ impl<N: Notify + OnResize> Processor<N> {
     }
 
     /// Check if an event is irrelevant and can be skipped.
-    fn skip_event(event: &GlutinEvent<Event>) -> bool {
+    fn skip_event(event: &GlutinEvent<'_, Event>) -> bool {
         match event {
             GlutinEvent::WindowEvent { event, .. } => matches!(
                 event,
@@ -1064,8 +1068,10 @@ impl<N: Notify + OnResize> Processor<N> {
         }
     }
 
-    fn reload_config<T>(path: &PathBuf, processor: &mut input::Processor<T, ActionContext<N, T>>)
-    where
+    fn reload_config<T>(
+        path: &PathBuf,
+        processor: &mut input::Processor<'_, T, ActionContext<'_, N, T>>,
+    ) where
         T: EventListener,
     {
         if !processor.ctx.message_buffer.is_empty() {
@@ -1112,7 +1118,7 @@ impl<N: Notify + OnResize> Processor<N> {
             processor.ctx.window.set_title(&config.ui_config.window.title);
         }
 
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         if processor.ctx.event_loop.is_wayland() {
             processor.ctx.window.set_wayland_theme(&config.colors);
         }

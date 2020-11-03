@@ -402,6 +402,8 @@ pub enum Mode {
     SgrMouse = 1006,
     /// ?1007
     AlternateScroll = 1007,
+    /// ?1042
+    UrgencyHints = 1042,
     /// ?1049
     SwapScreenAndSetRestoreCursor = 1049,
     /// ?2004
@@ -434,6 +436,7 @@ impl Mode {
                 1005 => Mode::Utf8Mouse,
                 1006 => Mode::SgrMouse,
                 1007 => Mode::AlternateScroll,
+                1042 => Mode::UrgencyHints,
                 1049 => Mode::SwapScreenAndSetRestoreCursor,
                 2004 => Mode::BracketedPaste,
                 _ => {
@@ -1152,7 +1155,7 @@ where
     }
 }
 
-fn attrs_from_sgr_parameters(params: &mut ParamsIter) -> Vec<Option<Attr>> {
+fn attrs_from_sgr_parameters(params: &mut ParamsIter<'_>) -> Vec<Option<Attr>> {
     let mut attrs = Vec::with_capacity(params.size_hint().0);
 
     while let Some(param) = params.next() {
