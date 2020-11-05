@@ -112,7 +112,12 @@ impl Renderer {
         self.grids.clear(color, background_opacity);
 
         unsafe {
-            gl::ClearColor(0.0, 0.0, 0.0, 0.0);
+            gl::ClearColor(
+                color.r as f32 / 255.0,
+                color.g as f32 / 255.0,
+                color.b as f32 / 255.0,
+                background_opacity,
+            );
             gl::Clear(gl::COLOR_BUFFER_BIT);
         }
     }
