@@ -103,17 +103,8 @@ impl Renderer {
         func(LoaderApi { renderer: self })
     }
 
-    pub fn resize(&mut self, size_info: &term::SizeInfo) {
-        unsafe {
-            gl::Viewport(
-                size_info.padding_x() as i32,
-                size_info.padding_y() as i32,
-                size_info.width() as i32 - 2 * size_info.padding_x() as i32,
-                size_info.height() as i32 - 2 * size_info.padding_y() as i32,
-            );
-        }
-
-        self.grids.resize(size_info);
+    pub fn resize(&mut self, size_info: &term::SizeInfo, total_lines: Line) {
+        self.grids.resize(size_info, total_lines);
     }
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {

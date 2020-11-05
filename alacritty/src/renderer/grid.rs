@@ -6,6 +6,7 @@ use super::texture::{create_texture, upload_texture, PixelFormat};
 use crate::gl;
 use crate::gl::types::*;
 use crate::renderer::Error;
+use alacritty_terminal::index::Line;
 use alacritty_terminal::term::{color::Rgb, RenderableCell, SizeInfo};
 use log::*;
 use std::ptr;
@@ -115,9 +116,9 @@ impl GridGlyphRenderer {
     }
 
     /// Resize buffers for a new screen resolution.
-    pub fn resize(&mut self, size_info: &SizeInfo) {
+    pub fn resize(&mut self, size_info: &SizeInfo, total_lines: Line) {
         self.columns = size_info.cols().0;
-        self.lines = size_info.visible_lines().0;
+        self.lines = total_lines.0;
         let cells = self.columns * self.lines;
 
         self.screen_colors_bg.resize(cells, [0u8; 4]);
