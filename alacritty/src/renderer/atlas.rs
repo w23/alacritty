@@ -102,7 +102,7 @@ impl GridAtlas {
             grid_size,
             free_line: 0,
             free_column: 1, // FIXME do not use sentinel 0,0 value as empty, prefere flags instead
-            filling_line: Blitmap::new(atlas_cell_size.x * grid_size.x, atlas_cell_size.y),
+            filling_line: Blitmap::new(GRID_ATLAS_SIZE, atlas_cell_size.y),
             committed_column: 0,
         };
         debug!("new atlas with padding: {:?}, {:?}", padding, ret);
@@ -242,7 +242,7 @@ impl GridAtlas {
                 0,
                 0, // Upload the entire line from start, TODO: optimize
                 self.free_line * self.cell_size.y, // Upload the active line
-                self.free_column * self.cell_size.x, // Upload only what's been written
+                GRID_ATLAS_SIZE, // Upload  the entire line, TODO: upload only what's been written
                 self.cell_size.y, // Upload only one line
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
