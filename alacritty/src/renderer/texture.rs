@@ -1,7 +1,7 @@
+use std::ptr;
+
 use crate::gl;
 use crate::gl::types::*;
-
-use std::ptr;
 
 pub enum PixelFormat {
     RGBA8,

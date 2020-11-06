@@ -1,15 +1,16 @@
-use super::rects::RenderRect;
-use super::shade::RectShaderProgram;
-use crate::gl;
-use crate::gl::types::*;
-use crate::renderer::Error;
-use alacritty_terminal::term::SizeInfo;
+use std::mem::size_of;
+use std::ptr;
 
 #[cfg(feature = "live-shader-reload")]
 use log::*;
 
-use std::mem::size_of;
-use std::ptr;
+use alacritty_terminal::term::SizeInfo;
+
+use crate::gl;
+use crate::gl::types::*;
+use crate::renderer::rects::RenderRect;
+use crate::renderer::shade::RectShaderProgram;
+use crate::renderer::Error;
 
 enum InsertError {
     Full,

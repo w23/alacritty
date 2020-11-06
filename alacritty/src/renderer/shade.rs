@@ -1,14 +1,14 @@
-use crate::gl;
-use crate::gl::types::*;
-use alacritty_terminal::term::SizeInfo;
-use std::fmt;
-use std::fmt::Display;
-use std::fmt::Formatter;
+use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::path::PathBuf;
 
+use alacritty_terminal::term::SizeInfo;
+
+use crate::gl;
+use crate::gl::types::*;
+
 #[cfg(feature = "live-shader-reload")]
-use super::filewatch;
+use crate::renderer::filewatch;
 
 #[derive(Debug)]
 pub enum ShaderCreationError {

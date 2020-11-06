@@ -1,16 +1,17 @@
-use super::atlas::{Atlas, AtlasInsertError};
-use super::glyph::{QuadAtlasGlyph, RasterizedGlyph};
-use super::math::*;
-use super::shade::GlyphRectShaderProgram;
-use crate::gl;
-use crate::gl::types::*;
-use crate::renderer::Error;
-use alacritty_terminal::term::SizeInfo;
+use std::mem::size_of;
+use std::ptr;
 
 use log::*;
 
-use std::mem::size_of;
-use std::ptr;
+use alacritty_terminal::term::SizeInfo;
+
+use crate::gl;
+use crate::gl::types::*;
+use crate::renderer::atlas::{Atlas, AtlasInsertError};
+use crate::renderer::glyph::{QuadAtlasGlyph, RasterizedGlyph};
+use crate::renderer::math::*;
+use crate::renderer::shade::GlyphRectShaderProgram;
+use crate::renderer::Error;
 
 enum RectAddError {
     Full,

@@ -1,15 +1,18 @@
-use super::atlas::{AtlasInsertError, GridAtlas};
-use super::glyph::{GridAtlasGlyph, RasterizedGlyph};
-use super::math::*;
-use super::shade::GridShaderProgram;
-use super::texture::{create_texture, upload_texture, PixelFormat};
-use crate::gl;
-use crate::gl::types::*;
-use crate::renderer::Error;
+use std::ptr;
+
+use log::*;
+
 use alacritty_terminal::index::Line;
 use alacritty_terminal::term::{color::Rgb, RenderableCell, SizeInfo};
-use log::*;
-use std::ptr;
+
+use crate::gl;
+use crate::gl::types::*;
+use crate::renderer::atlas::{AtlasInsertError, GridAtlas};
+use crate::renderer::glyph::{GridAtlasGlyph, RasterizedGlyph};
+use crate::renderer::math::*;
+use crate::renderer::shade::GridShaderProgram;
+use crate::renderer::texture::{create_texture, upload_texture, PixelFormat};
+use crate::renderer::Error;
 
 #[derive(Debug)]
 pub struct CursorRef {

@@ -1,3 +1,8 @@
+use alacritty_terminal::config::Cursor;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::{self, Flags};
+use alacritty_terminal::term::{self, color::Rgb, RenderableCell, RenderableCellContent, SizeInfo};
+
 mod atlas;
 mod grid;
 mod math;
@@ -15,18 +20,15 @@ pub mod rects;
 use crate::config::ui_config::UIConfig;
 use crate::cursor;
 use crate::gl;
-use alacritty_terminal::config::Cursor;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::{self, Flags};
-use alacritty_terminal::term::{self, color::Rgb, RenderableCell, RenderableCellContent, SizeInfo};
-pub use glyph::GlyphCache;
-use glyph::{AtlasGlyph, GlyphKey, LoadGlyph, RasterizedGlyph};
-use grid::GridGlyphRenderer;
-use math::*;
-use quad::{GlyphQuad, QuadGlyphRenderer};
-use rects::RenderRect;
-use shade::ShaderCreationError;
-use solidrect::SolidRectRenderer;
+
+pub use crate::renderer::glyph::GlyphCache;
+use crate::renderer::glyph::{AtlasGlyph, GlyphKey, LoadGlyph, RasterizedGlyph};
+use crate::renderer::grid::GridGlyphRenderer;
+use crate::renderer::math::*;
+use crate::renderer::quad::{GlyphQuad, QuadGlyphRenderer};
+use crate::renderer::rects::RenderRect;
+use crate::renderer::shade::ShaderCreationError;
+use crate::renderer::solidrect::SolidRectRenderer;
 
 #[derive(Debug)]
 pub enum Error {

@@ -1,13 +1,14 @@
-use log::*;
 use std::ptr;
+
+use crossfont::BitmapBuffer;
+use log::*;
 
 use crate::gl;
 use crate::gl::types::*;
-use crossfont::BitmapBuffer;
 
-use super::glyph::{GridAtlasGlyph, QuadAtlasGlyph, RasterizedGlyph};
-use super::math::*;
-use super::texture::*;
+use crate::renderer::glyph::{GridAtlasGlyph, QuadAtlasGlyph, RasterizedGlyph};
+use crate::renderer::math::*;
+use crate::renderer::texture::*;
 
 /// Rationale for 1024x1024 texture:
 /// - for most common case (mostly ASCII-only contents and reasonable font size) this is more than

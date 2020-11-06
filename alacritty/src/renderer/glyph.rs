@@ -1,15 +1,20 @@
-use super::math::*;
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+
+use fnv::FnvHasher;
+use log::*;
+
+use crossfont::{FontDesc, FontKey, Rasterize, Rasterizer, Size, Slant, Style, Weight};
+
+use alacritty_terminal::ansi::CursorStyle;
+use alacritty_terminal::term::CursorKey;
+
 use crate::config::font::{Font, FontDescription};
 use crate::config::ui_config::Delta;
 use crate::config::Config;
 use crate::cursor;
-use alacritty_terminal::ansi::CursorStyle;
-use alacritty_terminal::term::CursorKey;
-use crossfont::{FontDesc, FontKey, Rasterize, Rasterizer, Size, Slant, Style, Weight};
-use fnv::FnvHasher;
-use log::*;
-use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
+
+use crate::renderer::math::*;
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct GlyphKey {
