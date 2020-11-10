@@ -29,8 +29,10 @@ use crate::config::ui_config::{Delta, UIConfig};
 use crate::cursor;
 use crate::gl;
 use crate::gl::types::*;
+use crate::renderer::batch::Batcher;
 use crate::renderer::rects::RenderRect;
 
+mod batch;
 pub mod rects;
 
 // Shader paths for live reload.
@@ -122,6 +124,7 @@ pub struct RectShaderProgram {
 
 #[derive(Copy, Debug, Clone)]
 pub struct Glyph {
+    atlas_index: usize,
     tex_id: GLuint,
     multicolor: u8,
     top: i16,
@@ -359,61 +362,59 @@ impl GlyphCache {
     }
 }
 
-#[derive(Debug)]
-#[repr(C)]
-struct InstanceData {
-    // Coords.
-    col: u16,
-    row: u16,
-    // Glyph offset.
-    left: i16,
-    top: i16,
-    // Glyph size.
-    width: i16,
-    height: i16,
-    // UV offset.
-    uv_left: f32,
-    uv_bot: f32,
-    // uv scale.
-    uv_width: f32,
-    uv_height: f32,
-    // Color.
-    r: u8,
-    g: u8,
-    b: u8,
-    // Flag indicating that a glyph uses multiple colors; like an Emoji.
-    multicolor: u8,
-    // Background color.
-    bg_r: u8,
-    bg_g: u8,
-    bg_b: u8,
-    bg_a: u8,
-}
+// #[derive(Debug)]
+// #[repr(C)]
+// struct InstanceData {
+//     // Coords.
+//     col: u16,
+//     row: u16,
+//     // Glyph offset.
+//     left: i16,
+//     top: i16,
+//     // Glyph size.
+//     width: i16,
+//     height: i16,
+//     // UV offset.
+//     uv_left: f32,
+//     uv_bot: f32,
+//     // uv scale.
+//     uv_width: f32,
+//     uv_height: f32,
+//     // Color.
+//     r: u8,
+//     g: u8,
+//     b: u8,
+//     // Flag indicating that a glyph uses multiple colors; like an Emoji.
+//     multicolor: u8,
+//     // Background color.
+//     bg_r: u8,
+//     bg_g: u8,
+//     bg_b: u8,
+//     bg_a: u8,
+// }
 
 #[derive(Debug)]
 pub struct QuadRenderer {
     program: TextShaderProgram,
     rect_program: RectShaderProgram,
-    vao: GLuint,
-    ebo: GLuint,
-    vbo_instance: GLuint,
     rect_vao: GLuint,
     rect_vbo: GLuint,
     atlas: Vec<Atlas>,
     current_atlas: usize,
     active_tex: GLuint,
-    batch: Batch,
+    batcher: Batcher,
     rx: mpsc::Receiver<Msg>,
 }
 
 #[derive(Debug)]
 pub struct RenderApi<'a> {
     active_tex: &'a mut GLuint,
-    batch: &'a mut Batch,
+    batcher: &'a mut Batcher,
     atlas: &'a mut Vec<Atlas>,
     current_atlas: &'a mut usize,
     program: &'a mut TextShaderProgram,
     config: &'a UIConfig,
+    size_info: &'a SizeInfo,
     cursor_config: Cursor,
 }
 
@@ -424,93 +425,87 @@ pub struct LoaderApi<'a> {
     current_atlas: &'a mut usize,
 }
 
-#[derive(Debug, Default)]
-pub struct Batch {
-    tex: GLuint,
-    instances: Vec<InstanceData>,
-}
-
-impl Batch {
-    #[inline]
-    pub fn new() -> Self {
-        Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
-    }
-
-    pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
-        if self.is_empty() {
-            self.tex = glyph.tex_id;
-        }
-
-        self.instances.push(InstanceData {
-            col: cell.column.0 as u16,
-            row: cell.line.0 as u16,
-
-            top: glyph.top,
-            left: glyph.left,
-            width: glyph.width,
-            height: glyph.height,
-
-            uv_bot: glyph.uv_bot,
-            uv_left: glyph.uv_left,
-            uv_width: glyph.uv_width,
-            uv_height: glyph.uv_height,
-
-            r: cell.fg.r,
-            g: cell.fg.g,
-            b: cell.fg.b,
-
-            bg_r: cell.bg.r,
-            bg_g: cell.bg.g,
-            bg_b: cell.bg.b,
-            bg_a: (cell.bg_alpha * 255.0) as u8,
-            multicolor: glyph.multicolor,
-        });
-    }
-
-    #[inline]
-    pub fn full(&self) -> bool {
-        self.capacity() == self.len()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.instances.len()
-    }
-
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        BATCH_MAX
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn size(&self) -> usize {
-        self.len() * size_of::<InstanceData>()
-    }
-
-    pub fn clear(&mut self) {
-        self.tex = 0;
-        self.instances.clear();
-    }
-}
+// #[derive(Debug, Default)]
+// pub struct Batch {
+//     tex: GLuint,
+//     instances: Vec<InstanceData>,
+// }
+//
+// impl Batch {
+//     #[inline]
+//     pub fn new() -> Self {
+//         Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
+//     }
+//
+//     pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
+//         if self.is_empty() {
+//             self.tex = glyph.tex_id;
+//         }
+//
+//         self.instances.push(InstanceData {
+//             col: cell.column.0 as u16,
+//             row: cell.line.0 as u16,
+//
+//             top: glyph.top,
+//             left: glyph.left,
+//             width: glyph.width,
+//             height: glyph.height,
+//
+//             uv_bot: glyph.uv_bot,
+//             uv_left: glyph.uv_left,
+//             uv_width: glyph.uv_width,
+//             uv_height: glyph.uv_height,
+//
+//             r: cell.fg.r,
+//             g: cell.fg.g,
+//             b: cell.fg.b,
+//
+//             bg_r: cell.bg.r,
+//             bg_g: cell.bg.g,
+//             bg_b: cell.bg.b,
+//             bg_a: (cell.bg_alpha * 255.0) as u8,
+//             multicolor: glyph.multicolor,
+//         });
+//     }
+//
+//     #[inline]
+//     pub fn full(&self) -> bool {
+//         self.capacity() == self.len()
+//     }
+//
+//     #[inline]
+//     pub fn len(&self) -> usize {
+//         self.instances.len()
+//     }
+//
+//     #[inline]
+//     pub fn capacity(&self) -> usize {
+//         BATCH_MAX
+//     }
+//
+//     #[inline]
+//     pub fn is_empty(&self) -> bool {
+//         self.len() == 0
+//     }
+//
+//     #[inline]
+//     pub fn size(&self) -> usize {
+//         self.len() * size_of::<InstanceData>()
+//     }
+//
+//     pub fn clear(&mut self) {
+//         self.tex = 0;
+//         self.instances.clear();
+//     }
+// }
 
 /// Maximum items to be drawn in a batch.
-const BATCH_MAX: usize = 0x1_0000;
 const ATLAS_SIZE: i32 = 1024;
 
 impl QuadRenderer {
     pub fn new() -> Result<QuadRenderer, Error> {
         let program = TextShaderProgram::new()?;
         let rect_program = RectShaderProgram::new()?;
-
-        let mut vao: GLuint = 0;
-        let mut ebo: GLuint = 0;
-
-        let mut vbo_instance: GLuint = 0;
 
         let mut rect_vao: GLuint = 0;
         let mut rect_vbo: GLuint = 0;
@@ -523,78 +518,6 @@ impl QuadRenderer {
 
             // Disable depth mask, as the renderer never uses depth tests.
             gl::DepthMask(gl::FALSE);
-
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut ebo);
-            gl::GenBuffers(1, &mut vbo_instance);
-            gl::BindVertexArray(vao);
-
-            // ---------------------
-            // Set up element buffer
-            // ---------------------
-            let indices: [u32; 6] = [0, 1, 3, 1, 2, 3];
-
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (6 * size_of::<u32>()) as isize,
-                indices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
-
-            // ----------------------------
-            // Setup vertex instance buffer
-            // ----------------------------
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo_instance);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (BATCH_MAX * size_of::<InstanceData>()) as isize,
-                ptr::null(),
-                gl::STREAM_DRAW,
-            );
-
-            let mut index = 0;
-            let mut size = 0;
-
-            macro_rules! add_attr {
-                ($count:expr, $gl_type:expr, $type:ty) => {
-                    gl::VertexAttribPointer(
-                        index,
-                        $count,
-                        $gl_type,
-                        gl::FALSE,
-                        size_of::<InstanceData>() as i32,
-                        size as *const _,
-                    );
-                    gl::EnableVertexAttribArray(index);
-                    gl::VertexAttribDivisor(index, 1);
-
-                    #[allow(unused_assignments)]
-                    {
-                        size += $count * size_of::<$type>();
-                        index += 1;
-                    }
-                };
-            }
-
-            // Coords.
-            add_attr!(2, gl::UNSIGNED_SHORT, u16);
-
-            // Glyph offset and size.
-            add_attr!(4, gl::SHORT, i16);
-
-            // UV offset.
-            add_attr!(4, gl::FLOAT, f32);
-
-            // Color and multicolor flag.
-            //
-            // These are packed together because of an OpenGL driver issue on macOS, which caused a
-            // `vec3(u8)` text color and a `u8` multicolor flag to increase the rendering time by a
-            // huge margin.
-            add_attr!(4, gl::UNSIGNED_BYTE, u8);
-
-            // Background color.
-            add_attr!(4, gl::UNSIGNED_BYTE, u8);
 
             // Rectangle setup.
             gl::GenVertexArrays(1, &mut rect_vao);
@@ -650,15 +573,12 @@ impl QuadRenderer {
         let mut renderer = Self {
             program,
             rect_program,
-            vao,
-            ebo,
-            vbo_instance,
             rect_vao,
             rect_vbo,
             atlas: Vec::new(),
             current_atlas: 0,
             active_tex: 0,
-            batch: Batch::new(),
+            batcher: Batcher::new(),
             rx: msg_rx,
         };
 
@@ -738,22 +658,23 @@ impl QuadRenderer {
         }
         while self.rx.try_recv().is_ok() {}
 
-        unsafe {
-            gl::UseProgram(self.program.id);
-            self.program.set_term_uniforms(props);
-
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
-            gl::ActiveTexture(gl::TEXTURE0);
-        }
+        // unsafe {
+        //     gl::UseProgram(self.program.id);
+        //     self.program.set_term_uniforms(props);
+        //
+        //     gl::BindVertexArray(self.vao);
+        //     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
+        //     gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
+        //     gl::ActiveTexture(gl::TEXTURE0);
+        // }
 
         let res = func(RenderApi {
             active_tex: &mut self.active_tex,
-            batch: &mut self.batch,
+            batcher: &mut self.batcher,
             atlas: &mut self.atlas,
             current_atlas: &mut self.current_atlas,
             program: &mut self.program,
+            size_info: props,
             config,
             cursor_config,
         });
@@ -968,17 +889,19 @@ impl<'a> RenderApi<'a> {
 
     #[inline]
     fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
-        // Flush batch if tex changing.
-        if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
-            self.render_batch();
-        }
+        self.batcher.add_item(glyph.atlas_index, self.size_info, cell, glyph);
 
-        self.batch.add_item(cell, glyph);
-
-        // Render batch and clear if it's full.
-        if self.batch.full() {
-            self.render_batch();
-        }
+        // // Flush batch if tex changing.
+        // if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
+        //     self.render_batch();
+        // }
+        //
+        // self.batch.add_item(cell, glyph);
+        //
+        // // Render batch and clear if it's full.
+        // if self.batch.full() {
+        //     self.render_batch();
+        // }
     }
 
     pub fn render_cell(&mut self, mut cell: RenderableCell, glyph_cache: &mut GlyphCache) {
