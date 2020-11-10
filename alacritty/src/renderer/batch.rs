@@ -1,13 +1,12 @@
 use std::mem::size_of;
 use std::ptr;
 
-use log::*;
+// use log::*;
 
 use alacritty_terminal::term::{RenderableCell, SizeInfo};
 
 use crate::gl;
 use crate::gl::types::*;
-// use crate::renderer::math::*;
 use crate::renderer::{Atlas, Error, Glyph, TextShaderProgram};
 
 const BATCH_MAX: usize = 0x1_0000;
@@ -146,10 +145,15 @@ impl Batcher {
             self.atlas_batches.resize_with(glyph.atlas_index, Default::default);
         }
 
-        self.atlas_batches[glyph.atlas_index].add(size_info, cell, glyph);
+        self.atlas_batches[glyph.atlas_index].add(cell, glyph);
     }
 
-    pub fn draw(&mut self, atlases: &Vec<Atlas>, size_info: &SizeInfo, program: TextShaderProgram) {
+    pub fn draw(
+        &mut self,
+        atlases: &Vec<Atlas>,
+        size_info: &SizeInfo,
+        program: &TextShaderProgram,
+    ) {
         for (index, group) in &mut self.atlas_batches.iter().enumerate() {
             group.draw(atlases[index].id);
         }

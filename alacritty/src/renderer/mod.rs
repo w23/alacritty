@@ -125,7 +125,6 @@ pub struct RectShaderProgram {
 #[derive(Copy, Debug, Clone)]
 pub struct Glyph {
     atlas_index: usize,
-    tex_id: GLuint,
     multicolor: u8,
     top: i16,
     left: i16,
@@ -816,45 +815,45 @@ impl<'a> RenderApi<'a> {
         }
     }
 
-    fn render_batch(&mut self) {
-        unsafe {
-            gl::BufferSubData(
-                gl::ARRAY_BUFFER,
-                0,
-                self.batch.size() as isize,
-                self.batch.instances.as_ptr() as *const _,
-            );
-        }
-
-        // Bind texture if necessary.
-        if *self.active_tex != self.batch.tex {
-            unsafe {
-                gl::BindTexture(gl::TEXTURE_2D, self.batch.tex);
-            }
-            *self.active_tex = self.batch.tex;
-        }
-
-        unsafe {
-            self.program.set_background_pass(true);
-            gl::DrawElementsInstanced(
-                gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
-            );
-            self.program.set_background_pass(false);
-            gl::DrawElementsInstanced(
-                gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
-            );
-        }
-
-        self.batch.clear();
-    }
+    // fn render_batch(&mut self) {
+    //     unsafe {
+    //         gl::BufferSubData(
+    //             gl::ARRAY_BUFFER,
+    //             0,
+    //             self.batch.size() as isize,
+    //             self.batch.instances.as_ptr() as *const _,
+    //         );
+    //     }
+    //
+    //     // Bind texture if necessary.
+    //     if *self.active_tex != self.batch.tex {
+    //         unsafe {
+    //             gl::BindTexture(gl::TEXTURE_2D, self.batch.tex);
+    //         }
+    //         *self.active_tex = self.batch.tex;
+    //     }
+    //
+    //     unsafe {
+    //         self.program.set_background_pass(true);
+    //         gl::DrawElementsInstanced(
+    //             gl::TRIANGLES,
+    //             6,
+    //             gl::UNSIGNED_INT,
+    //             ptr::null(),
+    //             self.batch.len() as GLsizei,
+    //         );
+    //         self.program.set_background_pass(false);
+    //         gl::DrawElementsInstanced(
+    //             gl::TRIANGLES,
+    //             6,
+    //             gl::UNSIGNED_INT,
+    //             ptr::null(),
+    //             self.batch.len() as GLsizei,
+    //         );
+    //     }
+    //
+    //     self.batch.clear();
+    // }
 
     /// Render a string in a variable location. Used for printing the render timer, warnings and
     /// errors.
@@ -976,7 +975,7 @@ fn load_glyph(
 ) -> Glyph {
     // At least one atlas is guaranteed to be in the `self.atlas` list; thus
     // the unwrap.
-    match atlas[*current_atlas].insert(rasterized, active_tex) {
+    match atlas[*current_atlas].insert(*current_atlas, rasterized, active_tex) {
         Ok(glyph) => glyph,
         Err(AtlasInsertError::Full) => {
             *current_atlas += 1;
@@ -988,7 +987,7 @@ fn load_glyph(
             load_glyph(active_tex, atlas, current_atlas, rasterized)
         },
         Err(AtlasInsertError::GlyphTooLarge) => Glyph {
-            tex_id: atlas[*current_atlas].id,
+            atlas_index: *current_atlas,
             multicolor: 0,
             top: 0,
             left: 0,
@@ -1032,9 +1031,8 @@ impl<'a> LoadGlyph for RenderApi<'a> {
 
 impl<'a> Drop for RenderApi<'a> {
     fn drop(&mut self) {
-        if !self.batch.is_empty() {
-            self.render_batch();
-        }
+        // Draw all accumulated glyph quads.
+        self.batcher.draw(self.atlas, self.size_info, self.program);
     }
 }
 
@@ -1425,6 +1423,7 @@ impl Atlas {
     /// Insert a RasterizedGlyph into the texture atlas.
     pub fn insert(
         &mut self,
+        current_atlas: usize,
         glyph: &RasterizedGlyph,
         active_tex: &mut u32,
     ) -> Result<Glyph, AtlasInsertError> {
@@ -1443,7 +1442,7 @@ impl Atlas {
         }
 
         // There appears to be room; load the glyph.
-        Ok(self.insert_inner(glyph, active_tex))
+        Ok(self.insert_inner(current_atlas, glyph, active_tex))
     }
 
     /// Insert the glyph without checking for room.
@@ -1451,7 +1450,12 @@ impl Atlas {
     /// Internal function for use once atlas has been checked for space. GL
     /// errors could still occur at this point if we were checking for them;
     /// hence, the Result.
-    fn insert_inner(&mut self, glyph: &RasterizedGlyph, active_tex: &mut u32) -> Glyph {
+    fn insert_inner(
+        &mut self,
+        current_atlas: usize,
+        glyph: &RasterizedGlyph,
+        active_tex: &mut u32,
+    ) -> Glyph {
         let offset_y = self.row_baseline;
         let offset_x = self.row_extent;
         let height = glyph.height as i32;
@@ -1502,7 +1506,7 @@ impl Atlas {
         let uv_width = width as f32 / self.width as f32;
 
         Glyph {
-            tex_id: self.id,
+            atlas_index: current_atlas,
             multicolor: multicolor as u8,
             top: glyph.top as i16,
             left: glyph.left as i16,
