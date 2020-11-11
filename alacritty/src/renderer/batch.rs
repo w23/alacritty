@@ -120,12 +120,7 @@ impl Batcher {
         self.atlas_batches[glyph.atlas_index].add(size_info, cell, glyph);
     }
 
-    pub fn draw(
-        &mut self,
-        atlases: &Vec<Atlas>,
-        size_info: &SizeInfo,
-        program: &TextShaderProgram,
-    ) {
+    pub fn draw(&mut self, atlases: &[Atlas], size_info: &SizeInfo, program: &TextShaderProgram) {
         unsafe {
             // // Add padding to viewport.
             let pad_x = size_info.padding_x() as i32;
@@ -134,10 +129,9 @@ impl Batcher {
             let height = size_info.height() as i32 - 2 * pad_y;
             gl::Viewport(pad_x, pad_y, width, height);
 
-            // // Change blending strategy.
-            // gl::Enable(gl::BLEND);
-            // gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA,
-            // gl::ONE);
+            // Change blending strategy.
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
 
             // Swap program.
             gl::UseProgram(program.id);
@@ -210,26 +204,11 @@ struct Rgb {
     b: u8,
 }
 
-// #[repr(C)]
-// #[derive(Debug, Clone, Copy)]
-// struct Rgba {
-//     r: u8,
-//     g: u8,
-//     b: u8,
-//     a: u8,
-// }
-
 impl Rgb {
     fn from(color: alacritty_terminal::term::color::Rgb) -> Rgb {
         Rgb { r: color.r, g: color.g, b: color.b }
     }
 }
-
-// impl Rgba {
-//     fn from(color: alacritty_terminal::term::color::Rgb, alpha: f32) -> Rgba {
-//         Rgba { r: color.r, g: color.g, b: color.b, a: (alpha * 255.0) as u8 }
-//     }
-// }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -240,7 +219,6 @@ struct Vertex {
     u: f32,
     v: f32,
     fg: Rgb,
-    // bg: Rgba,
     flags: u8,
 }
 
@@ -273,7 +251,6 @@ impl Batch {
         let x = cell.column.0 as i16 * size_info.cell_width() as i16 + glyph.left;
         let y = (cell.line.0 + 1) as i16 * size_info.cell_height() as i16 - glyph.top;
         let fg = Rgb::from(cell.fg);
-        // let bg = Rgba::from(cell.bg, cell.bg_alpha);
         let flags = glyph.multicolor;
 
         self.vertices.push(Vertex {
@@ -282,25 +259,15 @@ impl Batch {
             u: glyph.uv_left,
             v: glyph.uv_bot + glyph.uv_height,
             fg,
-            // bg,
             flags,
         });
-        self.vertices.push(Vertex {
-            x,
-            y,
-            u: glyph.uv_left,
-            v: glyph.uv_bot,
-            fg,
-            // bg,
-            flags,
-        });
+        self.vertices.push(Vertex { x, y, u: glyph.uv_left, v: glyph.uv_bot, fg, flags });
         self.vertices.push(Vertex {
             x: x + glyph.width,
             y: y + glyph.height,
             u: glyph.uv_left + glyph.uv_width,
             v: glyph.uv_bot + glyph.uv_height,
             fg,
-            // bg,
             flags,
         });
         self.vertices.push(Vertex {
@@ -309,7 +276,6 @@ impl Batch {
             u: glyph.uv_left + glyph.uv_width,
             v: glyph.uv_bot,
             fg,
-            // bg,
             flags,
         });
 
@@ -329,15 +295,6 @@ impl Batch {
                 gl::STREAM_DRAW,
             );
 
-            // self.program.set_background_pass(true);
-            // gl::DrawElements(
-            //     gl::TRIANGLES,
-            //     (self.vertices.len() / 4 * 6) as i32,
-            //     gl::UNSIGNED_SHORT,
-            //     ptr::null(),
-            // );
-            //
-            // self.program.set_background_pass(false);
             gl::DrawElements(
                 gl::TRIANGLES,
                 (self.vertices.len() / 4 * 6) as i32,

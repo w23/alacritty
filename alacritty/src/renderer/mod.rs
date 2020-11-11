@@ -104,16 +104,6 @@ pub struct TextShaderProgram {
 
     /// Pixel-to-viewport scaling factor.
     u_scale: GLint,
-    /* /// Projection scale and offset uniform.
-     * u_projection: GLint,
-     *
-     * /// Cell dimensions (pixels).
-     * u_cell_dim: GLint,
-     *
-     * /// Background pass flag.
-     * ///
-     * /// Rendering is split into two passes; 1 for backgrounds, and one for text.
-     * u_background: GLint, */
 }
 
 /// Rectangle drawing program.
@@ -366,37 +356,6 @@ impl GlyphCache {
     }
 }
 
-// #[derive(Debug)]
-// #[repr(C)]
-// struct InstanceData {
-//     // Coords.
-//     col: u16,
-//     row: u16,
-//     // Glyph offset.
-//     left: i16,
-//     top: i16,
-//     // Glyph size.
-//     width: i16,
-//     height: i16,
-//     // UV offset.
-//     uv_left: f32,
-//     uv_bot: f32,
-//     // uv scale.
-//     uv_width: f32,
-//     uv_height: f32,
-//     // Color.
-//     r: u8,
-//     g: u8,
-//     b: u8,
-//     // Flag indicating that a glyph uses multiple colors; like an Emoji.
-//     multicolor: u8,
-//     // Background color.
-//     bg_r: u8,
-//     bg_g: u8,
-//     bg_b: u8,
-//     bg_a: u8,
-// }
-
 #[derive(Debug)]
 pub struct QuadRenderer {
     program: TextShaderProgram,
@@ -429,80 +388,6 @@ pub struct LoaderApi<'a> {
     current_atlas: &'a mut usize,
 }
 
-// #[derive(Debug, Default)]
-// pub struct Batch {
-//     tex: GLuint,
-//     instances: Vec<InstanceData>,
-// }
-//
-// impl Batch {
-//     #[inline]
-//     pub fn new() -> Self {
-//         Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
-//     }
-//
-//     pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
-//         if self.is_empty() {
-//             self.tex = glyph.tex_id;
-//         }
-//
-//         self.instances.push(InstanceData {
-//             col: cell.column.0 as u16,
-//             row: cell.line.0 as u16,
-//
-//             top: glyph.top,
-//             left: glyph.left,
-//             width: glyph.width,
-//             height: glyph.height,
-//
-//             uv_bot: glyph.uv_bot,
-//             uv_left: glyph.uv_left,
-//             uv_width: glyph.uv_width,
-//             uv_height: glyph.uv_height,
-//
-//             r: cell.fg.r,
-//             g: cell.fg.g,
-//             b: cell.fg.b,
-//
-//             bg_r: cell.bg.r,
-//             bg_g: cell.bg.g,
-//             bg_b: cell.bg.b,
-//             bg_a: (cell.bg_alpha * 255.0) as u8,
-//             multicolor: glyph.multicolor,
-//         });
-//     }
-//
-//     #[inline]
-//     pub fn full(&self) -> bool {
-//         self.capacity() == self.len()
-//     }
-//
-//     #[inline]
-//     pub fn len(&self) -> usize {
-//         self.instances.len()
-//     }
-//
-//     #[inline]
-//     pub fn capacity(&self) -> usize {
-//         BATCH_MAX
-//     }
-//
-//     #[inline]
-//     pub fn is_empty(&self) -> bool {
-//         self.len() == 0
-//     }
-//
-//     #[inline]
-//     pub fn size(&self) -> usize {
-//         self.len() * size_of::<InstanceData>()
-//     }
-//
-//     pub fn clear(&mut self) {
-//         self.tex = 0;
-//         self.instances.clear();
-//     }
-// }
-
 /// Maximum items to be drawn in a batch.
 const ATLAS_SIZE: i32 = 1024;
 
@@ -516,8 +401,6 @@ impl QuadRenderer {
         let mut rect_ebo: GLuint = 0;
 
         unsafe {
-            gl::Enable(gl::BLEND);
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
             gl::Enable(gl::MULTISAMPLE);
 
             // Disable depth mask, as the renderer never uses depth tests.
@@ -658,21 +541,11 @@ impl QuadRenderer {
     {
         // Flush message queue.
         if let Ok(Msg::ShaderReload) = self.rx.try_recv() {
-            self.reload_shaders(props);
+            self.reload_shaders();
         }
         while self.rx.try_recv().is_ok() {}
 
-        // unsafe {
-        //     gl::UseProgram(self.program.id);
-        //     self.program.set_term_uniforms(props);
-        //
-        //     gl::BindVertexArray(self.vao);
-        //     gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
-        //     gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
-        //     gl::ActiveTexture(gl::TEXTURE0);
-        // }
-
-        let res = func(RenderApi {
+        func(RenderApi {
             active_tex: &mut self.active_tex,
             batcher: &mut self.batcher,
             atlas: &mut self.atlas,
@@ -681,17 +554,7 @@ impl QuadRenderer {
             size_info: props,
             config,
             cursor_config,
-        });
-
-        unsafe {
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            gl::UseProgram(0);
-        }
-
-        res
+        })
     }
 
     pub fn with_loader<F, T>(&mut self, func: F) -> T
@@ -709,22 +572,11 @@ impl QuadRenderer {
         })
     }
 
-    pub fn reload_shaders(&mut self, props: &SizeInfo) {
+    pub fn reload_shaders(&mut self) {
         info!("Reloading shaders...");
         let result = (TextShaderProgram::new(), RectShaderProgram::new());
         let (program, rect_program) = match result {
             (Ok(program), Ok(rect_program)) => {
-                // unsafe {
-                //     gl::UseProgram(program.id);
-                //     program.update_projection(
-                //         props.width(),
-                //         props.height(),
-                //         props.padding_x(),
-                //         props.padding_y(),
-                //     );
-                //     gl::UseProgram(0);
-                // }
-
                 info!("... successfully reloaded shaders");
                 (program, rect_program)
             },
@@ -748,16 +600,6 @@ impl QuadRenderer {
                 size.width() as i32 - 2 * size.padding_x() as i32,
                 size.height() as i32 - 2 * size.padding_y() as i32,
             );
-
-            // // Update projection.
-            // gl::UseProgram(self.program.id);
-            // self.program.update_projection(
-            //     size.width(),
-            //     size.height(),
-            //     size.padding_x(),
-            //     size.padding_y(),
-            // );
-            // gl::UseProgram(0);
         }
     }
 
@@ -820,46 +662,6 @@ impl<'a> RenderApi<'a> {
         }
     }
 
-    // fn render_batch(&mut self) {
-    //     unsafe {
-    //         gl::BufferSubData(
-    //             gl::ARRAY_BUFFER,
-    //             0,
-    //             self.batch.size() as isize,
-    //             self.batch.instances.as_ptr() as *const _,
-    //         );
-    //     }
-    //
-    //     // Bind texture if necessary.
-    //     if *self.active_tex != self.batch.tex {
-    //         unsafe {
-    //             gl::BindTexture(gl::TEXTURE_2D, self.batch.tex);
-    //         }
-    //         *self.active_tex = self.batch.tex;
-    //     }
-    //
-    //     unsafe {
-    //         self.program.set_background_pass(true);
-    //         gl::DrawElementsInstanced(
-    //             gl::TRIANGLES,
-    //             6,
-    //             gl::UNSIGNED_INT,
-    //             ptr::null(),
-    //             self.batch.len() as GLsizei,
-    //         );
-    //         self.program.set_background_pass(false);
-    //         gl::DrawElementsInstanced(
-    //             gl::TRIANGLES,
-    //             6,
-    //             gl::UNSIGNED_INT,
-    //             ptr::null(),
-    //             self.batch.len() as GLsizei,
-    //         );
-    //     }
-    //
-    //     self.batch.clear();
-    // }
-
     /// Render a string in a variable location. Used for printing the render timer, warnings and
     /// errors.
     pub fn render_string(
@@ -894,18 +696,6 @@ impl<'a> RenderApi<'a> {
     #[inline]
     fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
         self.batcher.add_item(self.size_info, cell, glyph);
-
-        // // Flush batch if tex changing.
-        // if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
-        //     self.render_batch();
-        // }
-        //
-        // self.batch.add_item(cell, glyph);
-        //
-        // // Render batch and clear if it's full.
-        // if self.batch.full() {
-        //     self.render_batch();
-        // }
     }
 
     pub fn render_cell(&mut self, mut cell: RenderableCell, glyph_cache: &mut GlyphCache) {
@@ -1092,39 +882,6 @@ impl TextShaderProgram {
 
         Ok(shader)
     }
-
-    // fn update_projection(&self, width: f32, height: f32, padding_x: f32, padding_y: f32) {
-    //     // Bounds check.
-    //     if (width as u32) < (2 * padding_x as u32) || (height as u32) < (2 * padding_y as u32) {
-    //         return;
-    //     }
-    //
-    //     // Compute scale and offset factors, from pixel to ndc space. Y is inverted.
-    //     //   [0, width - 2 * padding_x] to [-1, 1]
-    //     //   [height - 2 * padding_y, 0] to [-1, 1]
-    //     let scale_x = 2. / (width - 2. * padding_x);
-    //     let scale_y = -2. / (height - 2. * padding_y);
-    //     let offset_x = -1.;
-    //     let offset_y = 1.;
-    //
-    //     unsafe {
-    //         gl::Uniform4f(self.u_projection, offset_x, offset_y, scale_x, scale_y);
-    //     }
-    // }
-    //
-    // fn set_term_uniforms(&self, props: &SizeInfo) {
-    //     unsafe {
-    //         gl::Uniform2f(self.u_cell_dim, props.cell_width(), props.cell_height());
-    //     }
-    // }
-    //
-    // fn set_background_pass(&self, background_pass: bool) {
-    //     let value = if background_pass { 1 } else { 0 };
-    //
-    //     unsafe {
-    //         gl::Uniform1i(self.u_background, value);
-    //     }
-    // }
 }
 
 impl Drop for TextShaderProgram {
@@ -1373,7 +1130,7 @@ pub struct Atlas {
 }
 
 /// Error that can happen when inserting a texture to the Atlas.
-enum AtlasInsertError {
+pub enum AtlasInsertError {
     /// Texture atlas is full.
     Full,
 
@@ -1413,14 +1170,14 @@ impl Atlas {
         Self { id, width: size, height: size, row_extent: 0, row_baseline: 0, row_tallest: 0 }
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.row_extent = 0;
         self.row_baseline = 0;
         self.row_tallest = 0;
     }
 
     /// Insert a RasterizedGlyph into the texture atlas.
-    pub fn insert(
+    fn insert(
         &mut self,
         current_atlas: usize,
         glyph: &RasterizedGlyph,
