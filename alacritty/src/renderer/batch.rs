@@ -1,8 +1,6 @@
 use std::mem::size_of;
 use std::ptr;
 
-// use log::*;
-
 use alacritty_terminal::term::{RenderableCell, SizeInfo};
 
 use crate::gl;
@@ -107,18 +105,34 @@ impl Batcher {
                 indices.as_ptr() as *const _,
                 gl::STATIC_DRAW,
             );
+
+            gl::BindVertexArray(0);
         }
         Self { vao, vbo, ebo, atlas_batches: Vec::new() }
     }
 
-    pub fn bind(&self, size_info: &SizeInfo, program: &TextShaderProgram) {
+    // pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad<'_>) {
+    pub fn add_item(&mut self, size_info: &SizeInfo, cell: &RenderableCell, glyph: &Glyph) {
+        if glyph.atlas_index >= self.atlas_batches.len() {
+            self.atlas_batches.resize_with(glyph.atlas_index + 1, Default::default);
+        }
+
+        self.atlas_batches[glyph.atlas_index].add(size_info, cell, glyph);
+    }
+
+    pub fn draw(
+        &mut self,
+        atlases: &Vec<Atlas>,
+        size_info: &SizeInfo,
+        program: &TextShaderProgram,
+    ) {
         unsafe {
             // // Add padding to viewport.
             let pad_x = size_info.padding_x() as i32;
             let pad_y = size_info.padding_y() as i32;
             let width = size_info.width() as i32 - 2 * pad_x;
             let height = size_info.height() as i32 - 2 * pad_y;
-            // gl::Viewport(pad_x, pad_y, width, height);
+            gl::Viewport(pad_x, pad_y, width, height);
 
             // // Change blending strategy.
             // gl::Enable(gl::BLEND);
@@ -128,7 +142,7 @@ impl Batcher {
             // Swap program.
             gl::UseProgram(program.id);
 
-            // gl::Uniform1i(program.u_atlas, 0);
+            gl::Uniform1i(program.u_atlas, 0);
             gl::Uniform2f(program.u_scale, 2.0 / width as f32, -2.0 / height as f32);
 
             // Set VAO bindings.
@@ -137,25 +151,13 @@ impl Batcher {
             // VBO is not part of VAO state. VBO binding will be used for uploading vertex data.
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
         }
-    }
 
-    // pub fn add_to_render(&mut self, size_info: &SizeInfo, glyph: &GlyphQuad<'_>) {
-    pub fn add_item(&mut self, atlas_index: usize, cell: &RenderableCell, glyph: &Glyph) {
-        if glyph.atlas_index >= self.atlas_batches.len() {
-            self.atlas_batches.resize_with(glyph.atlas_index, Default::default);
+        for (index, group) in self.atlas_batches.iter_mut().enumerate() {
+            group.draw_and_clear(atlases[index].id);
         }
 
-        self.atlas_batches[glyph.atlas_index].add(cell, glyph);
-    }
-
-    pub fn draw(
-        &mut self,
-        atlases: &Vec<Atlas>,
-        size_info: &SizeInfo,
-        program: &TextShaderProgram,
-    ) {
-        for (index, group) in &mut self.atlas_batches.iter().enumerate() {
-            group.draw(atlases[index].id);
+        unsafe {
+            gl::BindVertexArray(0);
         }
     }
 }
@@ -172,16 +174,6 @@ struct AtlasBatch {
 }
 
 impl AtlasBatch {
-    fn new() -> Self {
-        Self { batches: Vec::new() }
-    }
-
-    fn clear(&mut self) {
-        for batch in &mut self.batches {
-            batch.clear();
-        }
-    }
-
     fn add(&mut self, size_info: &SizeInfo, cell: &RenderableCell, glyph: &Glyph) {
         loop {
             if !self.batches.is_empty() {
@@ -197,7 +189,7 @@ impl AtlasBatch {
         }
     }
 
-    fn draw(&mut self, tex_id: GLuint) {
+    fn draw_and_clear(&mut self, tex_id: GLuint) {
         // Binding to active slot 0
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, tex_id);
@@ -205,6 +197,7 @@ impl AtlasBatch {
 
         for batch in &mut self.batches {
             batch.draw();
+            batch.clear();
         }
     }
 }
@@ -323,7 +316,7 @@ impl Batch {
         Ok(())
     }
 
-    fn draw(&mut self) {
+    fn draw(&self) {
         if self.vertices.is_empty() {
             return;
         }
