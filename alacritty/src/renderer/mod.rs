@@ -118,6 +118,9 @@ pub struct TextShaderProgram {
 pub struct RectShaderProgram {
     /// Program id.
     id: GLuint,
+
+    /// Half resolution uniform location.
+    u_half_res: GLint,
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -1165,12 +1168,13 @@ impl RectShaderProgram {
         unsafe {
             gl::DeleteShader(fragment_shader);
             gl::DeleteShader(vertex_shader);
-            gl::UseProgram(program);
         }
 
-        let shader = Self { id: program };
+        let u_half_res =
+            unsafe { gl::GetUniformLocation(program, b"u_half_res\0".as_ptr() as *const _) };
+        assert!(u_half_res >= 0);
 
-        unsafe { gl::UseProgram(0) }
+        let shader = Self { id: program, u_half_res };
 
         Ok(shader)
     }

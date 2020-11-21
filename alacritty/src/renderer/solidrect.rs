@@ -22,9 +22,8 @@ struct Rgba {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
-    // TODO these can certainly be i16
-    x: f32,
-    y: f32,
+    x: i16,
+    y: i16,
     color: Rgba,
 }
 
@@ -58,14 +57,14 @@ impl SolidRectRenderer {
             gl::VertexAttribPointer(
                 0,
                 2,
-                gl::FLOAT,
+                gl::SHORT,
                 gl::FALSE,
                 (size_of::<Vertex>()) as _,
                 ptr::null(),
             );
             gl::EnableVertexAttribArray(0);
 
-            // Color
+            // Color.
             gl::VertexAttribPointer(
                 1,
                 4,
@@ -93,7 +92,6 @@ impl SolidRectRenderer {
             return;
         }
 
-        // Prepare common state
         unsafe {
             // Remove padding from viewport.
             gl::Viewport(0, 0, size_info.width() as i32, size_info.height() as i32);
@@ -103,22 +101,19 @@ impl SolidRectRenderer {
 
             // Setup bindings. VAO will set up attribs and EBO, but not VBO.
             gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
 
             gl::UseProgram(program.id);
+            gl::Uniform2f(program.u_half_res, size_info.width() / 2., size_info.height() / 2.);
         }
 
-        let center_x = size_info.width() / 2.;
-        let center_y = size_info.height() / 2.;
-
         for rect in &rects {
-            self.append_rect(center_x, center_y, rect);
+            self.append_rect(rect);
         }
 
         self.draw_accumulated();
     }
 
-    fn append_rect(&mut self, center_x: f32, center_y: f32, rect: &RenderRect) {
+    fn append_rect(&mut self, rect: &RenderRect) {
         if rect.alpha <= 0. {
             return;
         }
@@ -126,10 +121,10 @@ impl SolidRectRenderer {
         assert!(self.vertices.len() <= MAX_U16_INDICES - 4);
 
         // Calculate rectangle position.
-        let x = (rect.x - center_x) / center_x;
-        let y = -(rect.y - center_y) / center_y;
-        let width = rect.width / center_x;
-        let height = rect.height / center_y;
+        let x = rect.x as i16;
+        let y = -rect.y as i16;
+        let w = rect.width as i16;
+        let h = -rect.height as i16;
         let color = Rgba {
             r: rect.color.r,
             g: rect.color.g,
@@ -139,9 +134,9 @@ impl SolidRectRenderer {
 
         self.vertices.extend_from_slice(&[
             Vertex { x, y, color },
-            Vertex { x, y: y - height, color },
-            Vertex { x: x + width, y, color },
-            Vertex { x: x + width, y: y - height, color },
+            Vertex { x, y: y + h, color },
+            Vertex { x: x + w, y, color },
+            Vertex { x: x + w, y: y + h, color },
         ]);
 
         if self.vertices.len() == MAX_U16_INDICES {
@@ -172,6 +167,7 @@ impl SolidRectRenderer {
 
         // Upload accumulated buffers
         unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
                 (self.vertices.len() * std::mem::size_of::<Vertex>()) as isize,
@@ -179,7 +175,7 @@ impl SolidRectRenderer {
                 gl::STREAM_DRAW,
             );
 
-            // If we need more indices than have been already uploaded
+            // Upload more indices if needed.
             if self.uploaded_indices < self.indices.len() {
                 gl::BufferData(
                     gl::ELEMENT_ARRAY_BUFFER,
