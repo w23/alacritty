@@ -1,20 +1,21 @@
-#version 330
-precision mediump float;
+#version 330 core
 
-layout(location = 0) out vec4 color;
 uniform sampler2D u_glyph_ref;
 uniform sampler2D u_atlas;
 uniform sampler2D u_color_fg;
 uniform sampler2D u_color_bg;
+
 uniform vec4 u_screen_dim; // .xy = padding, .zw = resolution
 uniform vec2 u_cell_dim;
-uniform vec4 u_atlas_dim; // .xy = offset, .zw = cell_size
+uniform vec2 u_atlas_dim; // .xy = cell_size
 uniform vec4 u_cursor;
 uniform vec3 u_cursor_color;
 uniform bool u_main_pass;
 
+layout(location = 0) out vec4 color;
+
 vec4 blendGlyphPixel(vec3 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
-	vec2 atlas_pix = glyph_ref.xy * u_atlas_dim.zw + u_atlas_dim.xy + cell_pix;
+	vec2 atlas_pix = glyph_ref.xy * u_atlas_dim.xy + cell_pix;
 	vec4 glyph = texture(u_atlas, atlas_pix / vec2(textureSize(u_atlas, 0)));
 	vec3 mask;
 
@@ -30,13 +31,6 @@ vec4 blendGlyphPixel(vec3 glyph_ref, vec2 cell_pix, vec3 fg, vec4 dst) {
 	}
 
 	return vec4(mix(dst.rgb, fg, mask.rgb), color.a + glyph.a);
-}
-
-void doGlyph(vec2 offset, vec2 cell, vec2 cell_pix, vec2 screen_cells, inout vec4 color) {
-	vec2 tuv = (cell + offset + .5) / screen_cells;
-	vec3 glyph_ref = texture(u_glyph_ref, tuv).rgb * 255.;
-	vec3 fg = texture(u_color_fg, tuv).rgb;
-	color = blendGlyphPixel(glyph_ref, cell_pix - u_cell_dim * offset, fg, color);
 }
 
 void main() {
@@ -81,29 +75,6 @@ void main() {
 	vec3 fg = texture(u_color_fg, tuv).rgb;
 	color = blendGlyphPixel(glyph, cell_pix, fg, color);
 
-	// Neighbour cells overlappery
-	// TODO: glyph-level (outside shader) masking for these cases so that we only check some bits
-	// instead of brute-forcing all cases
-
-	// TODO:
-	// -, +
-	// +. +
-	// -, 0
-	// +, 0
-	// -, -
-	// 0, -
-	// +, -
-
-	if (cell_pix.y > (u_cell_dim.y - u_atlas_dim.y) && cell.y < (screen_cells.y-1.)) {
-		doGlyph(vec2(0., 1.), cell, cell_pix, screen_cells, color);
-		//color.g = 1.;
-	}
-
-	if (cell.x > 0. && cell_pix.x < (u_atlas_dim.z - u_atlas_dim.x - u_cell_dim.x)) {
-		doGlyph(vec2(-1., 0.), cell, cell_pix, screen_cells, color);
-		//color.r = 1.;
-	}
-
 	//color = vec4(fg.rgb, 1.);
 	//color = vec4(bg.rgb, 1.);
 	//color = vec4(mask.rgb, 1.);
@@ -114,8 +85,8 @@ void main() {
 #ifdef ATLAS
 	{
 		color = vec4(0., 0., 0., 1.);
-		vec2 cp = mod(uv, u_atlas_dim.zw);
-		color.rg = fract(uv / u_atlas_dim.zw);
+		vec2 cp = mod(uv, u_atlas_dim);
+		color.rg = fract(uv / u_atlas_dim);
 		color.rgb += texture(u_atlas, uv / vec2(textureSize(u_atlas, 0))).rgb;
 		color.b += step(cp.y, u_atlas_dim.y);
 		color.b += step(cp.x, u_atlas_dim.x);

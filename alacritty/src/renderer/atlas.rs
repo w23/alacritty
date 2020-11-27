@@ -18,9 +18,6 @@ use crate::renderer::texture::*;
 /// it possible to increase atlas size (TODO)
 static GRID_ATLAS_SIZE: i32 = 1024;
 
-/// Additinal entry padding in percent
-static GRID_ATLAS_PAD_PCT: Vec2<i32> = Vec2 { x: 10, y: 10 };
-
 /// Error that can happen when inserting a texture to the Atlas.
 #[derive(Debug)]
 pub enum AtlasInsertError {
@@ -33,9 +30,6 @@ pub enum AtlasInsertError {
 
 /// Grid atlas entry dimensions.
 pub struct CellDims {
-    /// Offset to glyph baseline (i.e. padding).
-    pub offset: Vec2<i32>,
-
     /// Entire cell size.
     pub size: Vec2<i32>,
 }
@@ -56,14 +50,8 @@ pub struct GridAtlas {
     /// Atlas entry size.
     cell_size: Vec2<i32>,
 
-    /// Coordinate of glyph origin/baseline relative to atlas cell.
-    cell_offset: Vec2<i32>,
-
     /// Atlas table size in cells
     grid_size: Vec2<i32>,
-
-    /// Additional padding offset
-    half_padding: Vec2<i32>,
 
     /// Next free entry coordinates
     free_line: i32,
@@ -78,41 +66,29 @@ pub struct GridAtlas {
 
 impl GridAtlas {
     /// Create new grid atlas.
+    ///
     /// cell_size is the entire precomputed cell size for each element (atlas will also apply
     /// additional padding, see GRID_ATLAS_PAD_PCT) cell_offset is the position of glyph origin
     /// relative to cell left-bottom corner.
-    pub fn new(index: usize, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) -> Self {
-        let atlas_cell_size = cell_size + cell_offset;
-
-        // Apply additinal padding
-        // Note that cell_size and cell_offset already encode max of all basic characters sizes and
-        // offsets However, atlas might later encounter larger glyphs, so we'd better make
-        // some additinal space for them
-        let padding = (atlas_cell_size * GRID_ATLAS_PAD_PCT + 99) / 100;
-        let half_padding = padding / 2;
-        let cell_offset = cell_offset + half_padding;
-        let atlas_cell_size = atlas_cell_size + padding;
-        let grid_size = (Vec2::from(GRID_ATLAS_SIZE) / atlas_cell_size).min(Vec2::from(256));
+    pub fn new(index: usize, cell_size: Vec2<i32>) -> Self {
+        let grid_size = (Vec2::from(GRID_ATLAS_SIZE) / cell_size).min(Vec2::from(256));
 
         let ret = Self {
             index,
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
-            cell_size: atlas_cell_size,
-            cell_offset,
-            half_padding,
+            cell_size,
             grid_size,
             free_line: 0,
             free_column: 1, // FIXME do not use sentinel 0,0 value as empty, prefere flags instead
-            filling_line: Blitmap::new(GRID_ATLAS_SIZE, atlas_cell_size.y),
+            filling_line: Blitmap::new(GRID_ATLAS_SIZE, cell_size.y),
             committed_column: 0,
         };
-        debug!("new atlas with padding: {:?}, {:?}", padding, ret);
         ret
     }
 
     /// Return atlas entry cell dimensions
     pub fn cell_dims(&self) -> CellDims {
-        CellDims { offset: self.cell_offset, size: self.cell_size }
+        CellDims { size: self.cell_size }
     }
 
     /// Attempt to insert a new rasterized glyph into this atlas
@@ -165,11 +141,10 @@ impl GridAtlas {
         //   `- atlas cell texture origin (0, 0)
         //
 
-        let off_x = self.cell_offset.x + glyph.left;
-        let off_y = self.cell_size.y - glyph.top - self.half_padding.y;
+        // FIXME cut rasterized glyph into cells
 
-        let tex_x = off_x + column * self.cell_size.x;
-        let tex_y = off_y + line * self.cell_size.y;
+        let off_x = glyph.left;
+        let off_y = self.cell_size.y - glyph.top;
 
         if off_x < 0
             || off_y < 0
@@ -177,18 +152,24 @@ impl GridAtlas {
             || off_y + glyph.height > self.cell_size.y
         {
             debug!(
-                "glyph '{}' {},{} {}x{} doesn't fit into atlas cell size={:?} offset={:?}",
+                "glyph '{}' {},{} {}x{} doesn't fit into atlas {}, {} cell size={:?}",
                 glyph.c,
                 glyph.left,
                 glyph.top,
                 glyph.width,
                 glyph.height,
+                off_x,
+                off_y,
                 self.cell_size,
-                self.cell_offset,
             );
 
-            return Err(AtlasInsertError::GlyphTooLarge);
+            // return Err(AtlasInsertError::GlyphTooLarge);
         }
+
+        let off_x = std::cmp::max(0, off_x);
+        let off_y = std::cmp::max(0, off_y);
+        let tex_x = off_x + column * self.cell_size.x;
+        let tex_y = off_y + line * self.cell_size.y;
 
         let colored = match &glyph.buf {
             BitmapBuffer::RGB(_) => false,
@@ -210,7 +191,7 @@ impl GridAtlas {
             tex_y,
         );
 
-        self.filling_line.blit(tex_x, off_y, glyph);
+        self.filling_line.blit(tex_x, off_y, self.cell_size.x, self.cell_size.y, glyph);
 
         self.free_column += 1;
         if self.free_column == self.grid_size.x {
@@ -278,11 +259,20 @@ impl Blitmap {
         Self { width, height, pixels: vec![0u8; (width * height * 4) as usize] }
     }
 
-    fn blit(&mut self, pos_x: i32, pos_y: i32, glyph: &crossfont::RasterizedGlyph) {
+    fn blit(
+        &mut self,
+        pos_x: i32,
+        pos_y: i32,
+        width: i32,
+        height: i32,
+        glyph: &crossfont::RasterizedGlyph,
+    ) {
+        let width = std::cmp::min(width, glyph.width);
+        let height = std::cmp::min(height, glyph.height);
         match glyph.buf {
             BitmapBuffer::RGB(ref rgb) => {
-                for y in 0..glyph.height {
-                    for x in 0..glyph.width {
+                for y in 0..height {
+                    for x in 0..width {
                         let dst_off = 4 * (x + pos_x + (y + pos_y) * self.width) as usize;
                         let src_off = 3 * (x + y * glyph.width) as usize;
                         self.pixels[dst_off] = rgb[src_off];
@@ -294,8 +284,8 @@ impl Blitmap {
             },
             BitmapBuffer::RGBA(ref rgba) => {
                 // let line_width = glyph.width as usize * 4;
-                for y in 0..glyph.height {
-                    for x in 0..glyph.width {
+                for y in 0..height {
+                    for x in 0..width {
                         let dst_off = 4 * (x + pos_x + (y + pos_y) * self.width) as usize;
                         let src_off = 4 * (x + y * glyph.width) as usize;
                         self.pixels[dst_off] = rgba[src_off];

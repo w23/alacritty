@@ -354,7 +354,7 @@ impl GlyphCache {
 
         info!("Max glyph size: {:?}", cell_size);
 
-        loader.clear(atlas_cell_size, atlas_cell_offset);
+        loader.clear(self.cell_size, atlas_cell_offset);
 
         // Multipass grid render workaround for large font sizes
         // Generate cursor glyphs first to ensure that they end up strictly

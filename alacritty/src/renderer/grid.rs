@@ -302,11 +302,8 @@ impl GridGlyphRenderer {
             }
             let atlas_dims = pass.atlas.cell_dims();
             unsafe {
-                gl::Uniform4f(
+                gl::Uniform2f(
                     self.program.u_atlas_dim,
-                    atlas_dims.offset.x as f32,
-                    // Offset needs to be relative to "top" inverted-y OpenGL texture coords
-                    (atlas_dims.size.y - atlas_dims.offset.y) as f32 - size_info.cell_height(),
                     atlas_dims.size.x as f32,
                     atlas_dims.size.y as f32,
                 );
@@ -400,7 +397,7 @@ impl GridPass {
     ) -> Self {
         let cells = columns * lines;
         Self {
-            atlas: GridAtlas::new(index, cell_size, cell_offset),
+            atlas: GridAtlas::new(index, cell_size),
             glyphs: vec![EMPTY_GLYPH_REF; cells],
             dirty: false,
         }
