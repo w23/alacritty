@@ -78,8 +78,9 @@ impl GridGlyphRenderer {
             gl::GenVertexArrays(1, &mut vao);
             gl::BindVertexArray(vao);
 
-            // Upload just a single full-screen quad.
-            let vertices: [f32; 8] = [-1., 1., -1., -1., 1., 1., 1., -1.];
+            // Upload just a single full-screen triangle (which is more efficient that 2-tri quad
+            // because it doesn't require double fragment shader invocation on tri seam).
+            let vertices: [f32; 6] = [-4., 1., 1., -4., 1., 1.];
             gl::GenBuffers(1, &mut vbo);
             gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
             gl::BufferData(
@@ -348,7 +349,7 @@ impl GridGlyphRenderer {
             pass.atlas.bind_and_commit();
 
             unsafe {
-                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 3);
             }
 
             if main_pass {
