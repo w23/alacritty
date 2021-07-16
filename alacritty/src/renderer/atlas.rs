@@ -103,44 +103,6 @@ impl GridAtlas {
         let line = self.free_line;
         let column = self.free_column;
 
-        // Atlas cell metrics in logical glyph space
-        //   .----------------.<-- single glyph cell in atlas texture (self.cell_size)
-        //   |                |
-        //   |    .------.<---+---- glyph glyph bbox (width, height)
-        //   |    |  ##  |    |^
-        //   |  . | #  # | .<-++--- (dotted box) monospace grid cell directly mapped
-        //   |  . |#    #| .  ||     on screen w/o overlap (not really used in atlas explicitly)
-        //   |  . |######| .  ||--- glyph.top, relative to baseline/origin.y
-        //   |  . |#    #| .  ||
-        //   |  . |#    #| .  ||
-        //   |  . '------' .  |v
-        //   |  . . . . . . --+--- baseline
-        //   |  ^             |
-        //   |  |             |
-        //   '--+-------------'
-        //   ^  |
-        //   |  `-logical monospace grid cell origin, (0, 0)
-        //   `- atlas cell origin, -self.cell_offset relative to origin
-        //
-        // THIS BEAUTY NOW NEEDS TO BE MAPPED TO INVERSE OPENGL TEXTURE SPACE:
-        //
-        //   .----------------.-------
-        //   |                |^   ^
-        //   |  . . . . . .   ||---+-- self.cell_size.y
-        //   |  . .------.-.--++---|
-        //   |  . |#    #| .  || ^ |
-        //   |  . |#    #| .  || | |
-        //   |  . |######| .  || |-+--- glyph.height
-        //   |  . |#    #| .  || | |
-        //   |  . | #  # | .  || | |-- glyph.top
-        //   |    |  ##  |    || v v
-        //   |    '------'----|+-----.
-        //   |                |v      } offset.y = self.cell_size.y - glyph.top
-        //   '----------------'------`
-        //   ^
-        //   `- atlas cell texture origin (0, 0)
-        //
-
         // FIXME cut rasterized glyph into cells
 
         let off_x = glyph.left;
@@ -281,7 +243,7 @@ impl Blitmap {
                         self.pixels[dst_off + 3] = 0;
                     }
                 }
-            },
+            }
             BitmapBuffer::RGBA(ref rgba) => {
                 // let line_width = glyph.width as usize * 4;
                 for y in 0..height {
@@ -294,7 +256,7 @@ impl Blitmap {
                         self.pixels[dst_off + 3] = rgba[src_off + 3];
                     }
                 }
-            },
+            }
         }
     }
 
@@ -437,11 +399,11 @@ impl Atlas {
                 BitmapBuffer::RGB(buf) => {
                     colored = false;
                     (gl::RGB, buf)
-                },
+                }
                 BitmapBuffer::RGBA(buf) => {
                     colored = true;
                     (gl::RGBA, buf)
-                },
+                }
             };
 
             gl::TexSubImage2D(

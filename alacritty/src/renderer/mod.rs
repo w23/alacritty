@@ -6,7 +6,6 @@ use alacritty_terminal::term::{self, color::Rgb, RenderableCell, RenderableCellC
 mod atlas;
 mod grid;
 mod math;
-mod quad;
 mod shade;
 mod solidrect;
 mod texture;
@@ -25,7 +24,6 @@ pub use crate::renderer::glyph::GlyphCache;
 use crate::renderer::glyph::{AtlasGlyph, GlyphKey, LoadGlyph, RasterizedGlyph};
 use crate::renderer::grid::GridGlyphRenderer;
 use crate::renderer::math::*;
-use crate::renderer::quad::{GlyphQuad, QuadGlyphRenderer};
 use crate::renderer::rects::RenderRect;
 use crate::renderer::shade::ShaderCreationError;
 use crate::renderer::solidrect::SolidRectRenderer;
@@ -48,7 +46,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::ShaderCreation(err) => {
                 write!(f, "There was an error initializing the shaders: {}", err)
-            },
+            }
         }
     }
 }
@@ -65,12 +63,6 @@ pub struct Renderer {
     // Also used to draw backgound color
     grids: GridGlyphRenderer,
 
-    // Slower quad-based glyph renderer. Used for:
-    // - zero-width characters which are not well aligned with grid
-    // - wide characters (TODO: draw them using grid-based renderer also)
-    // - characters too big for cell-based renderer
-    quad_glyphs: QuadGlyphRenderer,
-
     // Solid-color rects
     solid_rects: SolidRectRenderer,
 }
@@ -82,11 +74,7 @@ impl Renderer {
             gl::DepthMask(gl::FALSE);
         }
 
-        Ok(Self {
-            grids: GridGlyphRenderer::new()?,
-            quad_glyphs: QuadGlyphRenderer::new(),
-            solid_rects: SolidRectRenderer::new()?,
-        })
+        Ok(Self { grids: GridGlyphRenderer::new()?, solid_rects: SolidRectRenderer::new()? })
     }
 
     pub fn begin<'a>(
@@ -107,10 +95,12 @@ impl Renderer {
 
     pub fn resize(&mut self, size_info: &term::SizeInfo, total_lines: Line) {
         self.grids.resize(size_info, total_lines);
+        unsafe {
+            gl::Viewport(0, 0, size_info.width() as i32, size_info.height() as i32);
+        }
     }
 
     pub fn clear(&mut self, color: Rgb, background_opacity: f32) {
-        self.quad_glyphs.clear();
         self.grids.clear(color, background_opacity);
 
         unsafe {
@@ -136,13 +126,12 @@ impl LoadGlyph for Renderer {
     fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> AtlasGlyph {
         match self.grids.load_glyph(rasterized) {
             Some(glyph) => AtlasGlyph::Grid(glyph),
-            None => AtlasGlyph::Quad(self.quad_glyphs.insert_into_atlas(rasterized)),
+            _ => unimplemented!(),
         }
     }
 
     fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
         self.grids.clear_atlas(cell_size, cell_offset);
-        self.quad_glyphs.clear_atlas();
     }
 }
 
@@ -225,22 +214,12 @@ impl<'a> RenderContext<'a> {
                             glyph_grid.line as f32,
                             cell.fg,
                         );
-                    },
-
-                    AtlasGlyph::Quad(quad) => {
-                        let glyph_quad = GlyphQuad {
-                            glyph: quad,
-                            pos: Vec2::<i16> {
-                                x: cell.column.0 as i16 * self.size_info.cell_width() as i16,
-                                y: cell.line.0 as i16 * self.size_info.cell_height() as i16,
-                            },
-                            fg: cell.fg,
-                        };
-
-                        self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-                    },
+                    }
+                    _ => {
+                        unimplemented!();
+                    }
                 }
-            },
+            }
 
             RenderableCellContent::Chars(chars) => {
                 // Get font key for cell.
@@ -297,7 +276,7 @@ impl<'a> RenderContext<'a> {
                         true,
                     );
                 }
-            },
+            }
         };
     }
 
@@ -313,29 +292,10 @@ impl<'a> RenderContext<'a> {
         match glyph {
             AtlasGlyph::Grid(grid_glyph) => {
                 self.this.grids.update_cell(cell, grid_glyph);
-            },
-            AtlasGlyph::Quad(quad_glyph) => {
-                let glyph_quad = GlyphQuad {
-                    glyph: quad_glyph,
-                    pos: Vec2::<i16> {
-                        x: (if zero_width {
-                            // The metrics of zero-width characters are based on rendering
-                            // the character after the current cell, with the anchor at the
-                            // right side of the preceding character. Since we render the
-                            // zero-width characters inside the preceding character, the
-                            // anchor has been moved to the right by one cell.
-                            1
-                        } else {
-                            0
-                        } + cell.column.0 as i16)
-                            * self.size_info.cell_width() as i16,
-                        y: cell.line.0 as i16 * self.size_info.cell_height() as i16,
-                    },
-                    fg: cell.fg,
-                };
-
-                self.this.quad_glyphs.add_to_render(self.size_info, &glyph_quad);
-            },
+            }
+            _ => {
+                unimplemented!();
+            }
         }
     }
 
@@ -360,7 +320,6 @@ impl<'a> RenderContext<'a> {
     /// Perform drawing of all text in the correct order.
     pub fn draw_text(&mut self) {
         self.this.grids.draw(self.size_info);
-        self.this.quad_glyphs.draw(self.size_info);
     }
 }
 

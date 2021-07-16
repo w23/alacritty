@@ -176,26 +176,22 @@ impl GridGlyphRenderer {
     /// Try to load a new rasterized glyph into grid atlas.
     /// Returns None if glyph cannot be rendered with grid method.
     pub fn load_glyph(&mut self, rasterized: &RasterizedGlyph) -> Option<GridAtlasGlyph> {
-        if rasterized.wide || rasterized.zero_width {
-            return None;
-        }
-
         loop {
             if !self.grid_passes.is_empty() {
                 match self.grid_passes.last_mut().unwrap().atlas.insert(rasterized) {
                     Ok(glyph) => {
                         return Some(glyph);
-                    },
+                    }
                     Err(AtlasInsertError::GlyphTooLarge) => {
                         trace!(
                             "Glyph '{}' is too large for grid atlas, will render it using quads",
                             rasterized.rasterized.c
                         );
                         return None;
-                    },
+                    }
                     Err(AtlasInsertError::Full) => {
                         debug!("GridAtlas is full, creating a new one");
-                    },
+                    }
                 }
             }
 
@@ -252,11 +248,11 @@ impl GridGlyphRenderer {
             match self.program.poll() {
                 Err(e) => {
                     error!("shader error: {}", e);
-                },
+                }
                 Ok(updated) if updated => {
                     debug!("updated shader: {:?}", self.program);
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
 
@@ -324,11 +320,11 @@ impl GridGlyphRenderer {
                             cursor.color[1],
                             cursor.color[2],
                         );
-                    },
+                    }
                     _ => {
                         gl::Uniform4f(self.program.u_cursor, -1., -1., 0., 0.);
                         gl::Uniform3f(self.program.u_cursor_color, 0., 0., 0.);
-                    },
+                    }
                 }
 
                 gl::ActiveTexture(gl::TEXTURE1);
