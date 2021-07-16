@@ -130,8 +130,8 @@ impl LoadGlyph for Renderer {
         }
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        self.grids.clear_atlas(cell_size, cell_offset);
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        self.grids.clear_atlas(cell_size);
     }
 }
 
@@ -215,9 +215,6 @@ impl<'a> RenderContext<'a> {
                             cell.fg,
                         );
                     }
-                    _ => {
-                        unimplemented!();
-                    }
                 }
             }
 
@@ -256,7 +253,6 @@ impl<'a> RenderContext<'a> {
                     },
                     &cell,
                     glyph_cache,
-                    false,
                 );
 
                 // Render zero-width characters.
@@ -273,7 +269,6 @@ impl<'a> RenderContext<'a> {
                         },
                         &cell,
                         glyph_cache,
-                        true,
                     );
                 }
             }
@@ -285,16 +280,12 @@ impl<'a> RenderContext<'a> {
         glyph_key: GlyphKey,
         cell: &RenderableCell,
         glyph_cache: &mut GlyphCache,
-        zero_width: bool,
     ) {
         let glyph = glyph_cache.get(glyph_key, self);
 
         match glyph {
             AtlasGlyph::Grid(grid_glyph) => {
                 self.this.grids.update_cell(cell, grid_glyph);
-            }
-            _ => {
-                unimplemented!();
             }
         }
     }
@@ -328,8 +319,8 @@ impl<'a> LoadGlyph for RenderContext<'a> {
         self.this.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        LoadGlyph::clear(self.this, cell_size, cell_offset);
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        LoadGlyph::clear(self.this, cell_size);
     }
 }
 
@@ -343,7 +334,7 @@ impl<'a> LoadGlyph for LoaderApi<'a> {
         self.renderer.load_glyph(rasterized)
     }
 
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
-        LoadGlyph::clear(self.renderer, cell_size, cell_offset);
+    fn clear(&mut self, cell_size: Vec2<i32>) {
+        LoadGlyph::clear(self.renderer, cell_size);
     }
 }

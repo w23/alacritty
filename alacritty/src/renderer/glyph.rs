@@ -38,7 +38,7 @@ pub trait LoadGlyph {
     /// Clear any state accumulated from previous loaded glyphs.
     ///
     /// This can, for instance, be used to reset the texture Atlas.
-    fn clear(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>);
+    fn clear(&mut self, cell_size: Vec2<i32>);
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -50,23 +50,8 @@ pub struct GridAtlasGlyph {
 }
 
 #[derive(Copy, Debug, Clone)]
-pub struct QuadAtlasGlyph {
-    pub atlas_index: usize,
-    pub uv_bot: f32,
-    pub uv_left: f32,
-    pub uv_width: f32,
-    pub uv_height: f32,
-    pub top: i16,
-    pub left: i16,
-    pub width: i16,
-    pub height: i16,
-    pub colored: bool,
-}
-
-#[derive(Copy, Debug, Clone)]
 pub enum AtlasGlyph {
     Grid(GridAtlasGlyph),
-    Quad(QuadAtlasGlyph),
 }
 
 /// Naïve glyph cache.
@@ -201,7 +186,7 @@ impl GlyphCache {
                 let fallback_desc =
                     Self::make_desc(&Font::default().normal(), Slant::Normal, Weight::Normal);
                 rasterizer.load_font(&fallback_desc, size)
-            },
+            }
         }
     }
 
@@ -354,7 +339,7 @@ impl GlyphCache {
 
         info!("Max glyph size: {:?}", cell_size);
 
-        loader.clear(self.cell_size, atlas_cell_offset);
+        loader.clear(self.cell_size);
 
         // Multipass grid render workaround for large font sizes
         // Generate cursor glyphs first to ensure that they end up strictly

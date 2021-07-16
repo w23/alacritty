@@ -30,7 +30,6 @@ pub struct GridGlyphRenderer {
 
     /// Grid cell metrics in pixels.
     cell_size: Vec2<i32>,
-    cell_offset: Vec2<i32>,
 
     /// Foreground colors array for each cell.
     screen_colors_fg: Vec<[u8; 3]>,
@@ -100,7 +99,6 @@ impl GridGlyphRenderer {
             lines: 0,
 
             cell_size: Vec2 { x: 0, y: 0 },
-            cell_offset: Vec2 { x: 0, y: 0 },
 
             screen_colors_fg: Vec::new(),
             screen_colors_bg: Vec::new(),
@@ -147,10 +145,8 @@ impl GridGlyphRenderer {
     }
 
     /// Completely obliterate atlas data in case e.g. font changed.
-    pub fn clear_atlas(&mut self, cell_size: Vec2<i32>, cell_offset: Vec2<i32>) {
+    pub fn clear_atlas(&mut self, cell_size: Vec2<i32>) {
         self.cell_size = cell_size;
-        self.cell_offset = cell_offset;
-
         self.grid_passes.clear();
     }
 
@@ -196,13 +192,7 @@ impl GridGlyphRenderer {
             }
 
             let index = self.grid_passes.len();
-            self.grid_passes.push(GridPass::new(
-                index,
-                self.columns,
-                self.lines,
-                self.cell_size,
-                self.cell_offset,
-            ));
+            self.grid_passes.push(GridPass::new(index, self.columns, self.lines, self.cell_size));
         }
     }
 
@@ -384,13 +374,7 @@ struct GridPass {
 }
 
 impl GridPass {
-    fn new(
-        index: usize,
-        columns: usize,
-        lines: usize,
-        cell_size: Vec2<i32>,
-        cell_offset: Vec2<i32>,
-    ) -> Self {
+    fn new(index: usize, columns: usize, lines: usize, cell_size: Vec2<i32>) -> Self {
         let cells = columns * lines;
         Self {
             atlas: GridAtlas::new(index, cell_size),

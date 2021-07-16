@@ -37,7 +37,7 @@ impl Display for ShaderCreationError {
             ShaderCreationError::Io(err) => write!(f, "Unable to read shader: {}", err),
             ShaderCreationError::Compile(path, log) => {
                 write!(f, "Failed compiling shader at {}: {}", path.display(), log)
-            },
+            }
             ShaderCreationError::Link(log) => write!(f, "Failed linking shader: {}", log),
         }
     }
@@ -177,7 +177,7 @@ impl Shader {
                 self.delete();
                 self.id = new_id;
                 true
-            },
+            }
             _ => false,
         })
     }
@@ -369,22 +369,6 @@ impl GridShaderProgram {
             gl::Uniform2f(self.u_cell_dim, size_info.cell_width(), size_info.cell_height());
         }
     }
-}
-
-#[cfg(feature = "live-shader-reload")]
-static GLYPHRECT_SHADER_V_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.v.glsl");
-#[cfg(feature = "live-shader-reload")]
-static GLYPHRECT_SHADER_F_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/glyphrect.f.glsl");
-#[cfg(not(feature = "live-shader-reload"))]
-static GLYPHRECT_SHADER_V: &str = include_str!("../../res/glyphrect.v.glsl");
-#[cfg(not(feature = "live-shader-reload"))]
-static GLYPHRECT_SHADER_F: &str = include_str!("../../res/glyphrect.f.glsl");
-
-declare_program! { GlyphRectShaderProgram,
-                GLYPHRECT_SHADER_V_PATH, GLYPHRECT_SHADER_V, GLYPHRECT_SHADER_F_PATH, GLYPHRECT_SHADER_F {
-                u_atlas,
-                u_scale
-        }
 }
 
 #[cfg(feature = "live-shader-reload")]
