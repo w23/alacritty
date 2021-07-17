@@ -64,14 +64,10 @@ pub struct GridAtlas {
 
 impl GridAtlas {
     /// Create new grid atlas.
-    ///
-    /// cell_size is the entire precomputed cell size for each element (atlas will also apply
-    /// additional padding, see GRID_ATLAS_PAD_PCT) cell_offset is the position of glyph origin
-    /// relative to cell left-bottom corner.
     pub fn new(index: usize, cell_size: Vec2<i32>) -> Self {
         let grid_size = (Vec2::from(GRID_ATLAS_SIZE) / cell_size).min(Vec2::from(256));
 
-        let ret = Self {
+        Self {
             index,
             tex: unsafe { create_texture(GRID_ATLAS_SIZE, GRID_ATLAS_SIZE, PixelFormat::RGBA8) },
             cell_size,
@@ -80,8 +76,7 @@ impl GridAtlas {
             free_column: 1, // FIXME do not use sentinel 0,0 value as empty, prefere flags instead
             filling_line: Blitmap::new(GRID_ATLAS_SIZE, cell_size.y),
             committed_column: 0,
-        };
-        ret
+        }
     }
 
     /// Return atlas entry cell dimensions
@@ -101,7 +96,7 @@ impl GridAtlas {
         let line = self.free_line;
         let column = self.free_column;
 
-        // FIXME cut rasterized glyph into cells
+        // FIXME cut rasterized glyph into cells: handle oversized and negative offsets
 
         let off_x = glyph.left;
         let off_y = self.cell_size.y - glyph.top;
@@ -111,8 +106,8 @@ impl GridAtlas {
             || off_x + glyph.width > self.cell_size.x
             || off_y + glyph.height > self.cell_size.y
         {
-            debug!(
-                "glyph '{}' {},{} {}x{} doesn't fit into atlas {}, {} cell size={:?}",
+            warn!(
+                "glyph '{}' {},{} {}x{} doesn't fit into atlas @ off=({}, {}) cell size={:?}",
                 glyph.c,
                 glyph.left,
                 glyph.top,
@@ -126,8 +121,8 @@ impl GridAtlas {
             // return Err(AtlasInsertError::GlyphTooLarge);
         }
 
-        let off_x = std::cmp::max(0, off_x);
-        let off_y = std::cmp::max(0, off_y);
+        let off_x = std::cmp::max(0, off_x - 1);
+        let off_y = std::cmp::max(0, off_y - 1);
         let tex_x = off_x + column * self.cell_size.x;
         let tex_y = off_y + line * self.cell_size.y;
 
@@ -204,7 +199,7 @@ impl Drop for GridAtlas {
     }
 }
 
-/// Helper struct to construct preliminary 32-bit (RGBA8) to be uploaded to a texture later.
+/// Helper struct to construct temporary 32-bit (RGBA8) pixel buffer to be uploaded to a texture later.
 #[derive(Debug)]
 struct Blitmap {
     width: i32,
@@ -219,6 +214,7 @@ impl Blitmap {
         Self { width, height, pixels: vec![0u8; (width * height * 4) as usize] }
     }
 
+    // TODO source offset
     fn blit(
         &mut self,
         pos_x: i32,
@@ -233,6 +229,7 @@ impl Blitmap {
             BitmapBuffer::RGB(ref rgb) => {
                 for y in 0..height {
                     for x in 0..width {
+                        // TODO faster math, do not compute offsets here
                         let dst_off = 4 * (x + pos_x + (y + pos_y) * self.width) as usize;
                         let src_off = 3 * (x + y * glyph.width) as usize;
                         self.pixels[dst_off] = rgb[src_off];
@@ -246,6 +243,7 @@ impl Blitmap {
                 // let line_width = glyph.width as usize * 4;
                 for y in 0..height {
                     for x in 0..width {
+                        // TODO faster math, do not compute offsets here
                         let dst_off = 4 * (x + pos_x + (y + pos_y) * self.width) as usize;
                         let src_off = 4 * (x + y * glyph.width) as usize;
                         self.pixels[dst_off] = rgba[src_off];
